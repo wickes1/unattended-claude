@@ -20,7 +20,10 @@ export class TaskStateStore {
     const f = this.layout.taskStateFile(id)
     if (!existsSync(f)) return null
     try {
-      return JSON.parse(readFileSync(f, "utf8")) as TaskRuntimeState
+      const raw = JSON.parse(readFileSync(f, "utf8")) as TaskRuntimeState
+      // Backward compat: state files written before F02 lack handoff_pending.
+      if (typeof raw.handoff_pending !== "boolean") raw.handoff_pending = false
+      return raw
     } catch {
       return null
     }
@@ -59,6 +62,7 @@ export class TaskStateStore {
       created_at: now,
       last_updated: now,
       workdir,
+      handoff_pending: false,
     }
     ensureDir(this.layout.taskStatesDir)
     atomicWrite(this.layout.taskStateFile(id), JSON.stringify(state, null, 2))

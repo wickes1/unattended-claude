@@ -21,6 +21,7 @@ import type {
   PausedReason,
   Runtime,
   TaskDoc,
+  TaskRuntimeState,
 } from "../types.ts"
 import { TaskStateStore } from "./state-store.ts"
 import { RateLimitGate, WeeklyLimitGate } from "./rate-limit.ts"
@@ -69,8 +70,15 @@ export interface OrchestratorDeps {
   runtime: Runtime
   /** Returns currently-planned task docs from tasks/. */
   loadTaskDocs: () => TaskDoc[]
-  /** Build the prompt file for a fresh episode. Returns the prompt file path. */
-  buildPromptFile: (task: TaskDoc, episode: number, resume: boolean) => string
+  /** Build the prompt file for a fresh episode. Returns the prompt file path.
+   *  `state` carries handoff_pending etc. so the implementation can choose
+   *  between continuation cue, resumeWithHandoff, or fresh task paste. */
+  buildPromptFile: (
+    task: TaskDoc,
+    episode: number,
+    resume: boolean,
+    state: TaskRuntimeState,
+  ) => string
   /** Build the wake-up prompt for a resumed episode (or null). */
   buildWakeUpPrompt: (task: TaskDoc, pausedReason: PausedReason | null) => string | null
   /**
@@ -251,6 +259,7 @@ export async function runOrchestrator(
           task,
           cur.current_episode + 1,
           cur.current_episode > 0,
+          cur,
         )
         const result = await runEpisode(task, cur, epCtx, promptFile, wakeUp)
         await applyResult(task, result, epCtx)

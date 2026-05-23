@@ -100,11 +100,20 @@ export function simLost(clock: SimClock, reason: string, durationMin = 1): MockB
   }
 }
 
-/** Context-full: claude TUI signaled context exhaustion. */
-export function simContextFull(clock: SimClock, durationMin = 5): MockBehavior {
+/**
+ * Context-full: claude TUI signaled context exhaustion.
+ * `handoffWritten` simulates whether the HANDOFF.md write succeeded
+ * (default true so context-full tests exercise the resume-from-handoff path).
+ */
+export function simContextFull(
+  clock: SimClock,
+  o: { durationMin?: number; handoffWritten?: boolean } = {},
+): MockBehavior {
+  const durationMin = o.durationMin ?? 5
+  const handoffWritten = o.handoffWritten ?? true
   return () => {
     clock.advance(durationMin * 60_000)
-    return { status: "context_full" }
+    return { status: "context_full", handoffWritten }
   }
 }
 

@@ -39,6 +39,20 @@ import {
 export const WIND_DOWN_PROMPT =
   "Schedule window is ending soon. Please finish the smallest unit you're currently working on (current file edit, running test) and don't start any new large work. Stop and wait once done — I'll close this session shortly. Your conversation history will be preserved and resumed in the next window."
 
+/**
+ * Build the HANDOFF-writing prompt the orchestrator injects when context-full
+ * is detected. The fresh next session will read this file via
+ * PromptBuilder.resumeWithHandoff to pick up.
+ */
+export function buildHandoffPrompt(handoffPath: string): string {
+  return (
+    `The context is running low. Before it resets, write a concise HANDOFF.md to ` +
+    `${handoffPath} summarizing: (1) original task goal, (2) what you've done so far, ` +
+    `(3) current state of code/files, (4) what comes next, (5) any open decisions. ` +
+    `Use markdown. After writing the file, reply with the single line: READY`
+  )
+}
+
 const STRAY_QUESTION_REPLY =
   "Proceed with your best judgment and document the assumption in HANDOFF.md."
 const MAX_STRAY_REPLIES = 2
@@ -135,6 +149,52 @@ export async function handleDialogs(
 }
 
 /**
+ * After context-full is detected, ask the AI to write HANDOFF.md and wait
+ * up to opts.handoffTimeoutMs for the file to appear (authoritative) or for
+ * a fresh "READY" line in the captured pane (secondary signal).
+ *
+ * Returns true = handoff was written (file exists), false = timeout
+ * (degraded recovery — next episode will resume with a generic cue).
+ *
+ * The file existing is the primary contract: if Claude wrote the file but
+ * never printed READY, we still treat it as success.
+ */
+async function writeHandoffOnContextFull(
+  opts: InvokeOpts,
+  log: Logger,
+  clock: Clock,
+  z: ZellijOps,
+): Promise<boolean> {
+  await z.sendText(opts.parentSession, opts.tabName, buildHandoffPrompt(opts.handoffPath))
+  const deadline = clock.now().getTime() + opts.handoffTimeoutMs
+  // We only count a READY line that appears AFTER the prompt was injected.
+  // The injection's own echo can include "READY" (it's inside the prompt
+  // text we just sent), so we wait one capture before considering READY.
+  let sawCaptureAfterInject = false
+
+  while (clock.now().getTime() < deadline) {
+    // Primary signal: file exists.
+    if (await Bun.file(opts.handoffPath).exists()) {
+      return true
+    }
+    // Secondary signal: a "READY" line in a capture taken after we injected.
+    if (sawCaptureAfterInject) {
+      const text = await z.capture(opts.parentSession, opts.tabName, 40)
+      if (/^READY\s*$/m.test(text)) {
+        // Re-check file: claude may write file *then* print READY.
+        if (await Bun.file(opts.handoffPath).exists()) return true
+      }
+    } else {
+      sawCaptureAfterInject = true
+    }
+    await clock.sleep(1000)
+  }
+
+  log.log("warn", `handoff write timed out after ${opts.handoffTimeoutMs}ms (degraded)`)
+  return false
+}
+
+/**
  * Unified detection loop (v2 §4.4.2).
  *
  * Per-tick checks (in priority order):
@@ -185,10 +245,11 @@ export async function pollUntilDone(
       }
     }
 
-    // 4. context-full
+    // 4. context-full — inject HANDOFF-writing prompt, wait for file + READY.
     if (matchContextLimit(text)) {
-      log.log("warn", "context-full detected")
-      return { status: "context_full" }
+      log.log("warn", "context-full detected; injecting HANDOFF-writing prompt")
+      const handoffWritten = await writeHandoffOnContextFull(opts, log, clock, z)
+      return { status: "context_full", handoffWritten }
     }
 
     // 5. wind-down injection — exactly once, when the window is about to end

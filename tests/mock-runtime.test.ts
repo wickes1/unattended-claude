@@ -28,6 +28,8 @@ function makeOpts(over: Partial<InvokeOpts> = {}): InvokeOpts {
     resume: false,
     windDownAt: null,
     wakeUpPrompt: null,
+    handoffPath: "/tmp/handoff.md",
+    handoffTimeoutMs: 120_000,
     ...over,
   }
 }
@@ -110,14 +112,23 @@ describe("simLost", () => {
 })
 
 describe("simContextFull", () => {
-  it("returns context_full with no payload", async () => {
+  it("returns context_full with handoffWritten=true by default", async () => {
     const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
     const result = await simContextFull(clock)(makeOpts(), { episodeNum: 1 })
-    expect(result).toEqual({ status: "context_full" })
+    expect(result).toEqual({ status: "context_full", handoffWritten: true })
     // default 5min advance
     expect(clock.now().getTime()).toBe(
       new Date("2026-05-23T00:00:00Z").getTime() + 5 * 60_000,
     )
+  })
+
+  it("honors handoffWritten=false override (degraded recovery)", async () => {
+    const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+    const result = await simContextFull(clock, { handoffWritten: false })(
+      makeOpts(),
+      { episodeNum: 1 },
+    )
+    expect(result).toEqual({ status: "context_full", handoffWritten: false })
   })
 })
 

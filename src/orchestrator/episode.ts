@@ -66,6 +66,8 @@ export function buildInvokeOpts(
     resume: state.current_episode > 0,
     windDownAt,
     wakeUpPrompt,
+    handoffPath: ctx.layout.handoffFile(task.id),
+    handoffTimeoutMs: 120_000,
   }
 }
 
@@ -118,6 +120,10 @@ export async function applyResult(
     s.current_episode += 1
     const epNum = s.current_episode
     const ts = ctx.clock.now().toISOString()
+    // Episode launched; the handoff (if any) has been consumed. The
+    // context_full branch below may re-set handoff_pending=true with a
+    // fresh handoff written by THIS episode.
+    s.handoff_pending = false
 
     switch (result.status) {
       case "completed":
@@ -167,6 +173,15 @@ export async function applyResult(
         s.context_compactions += 1
         s.state = "paused"
         s.paused_reason = "context-full"
+        s.handoff_pending = result.handoffWritten
+        if (result.handoffWritten) {
+          appendEvent(ctx.layout, {
+            ts,
+            event: "handoff_written",
+            task: task.id,
+            path: ctx.layout.handoffFile(task.id),
+          })
+        }
         appendEvent(ctx.layout, {
           ts,
           event: "context_compaction",
