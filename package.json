@@ -1,0 +1,16 @@
+{
+  "name": "unattended-claude",
+  "version": "0.1.0",
+  "description": "Demand-shifting unattended Claude Code runtime",
+  "private": true,
+  "type": "module",
+  "bin": { "ucl": "./src/index.ts" },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "yaml": "^2.9.0" },
+  "devDependencies": { "@types/bun": "^1.3.14", "typescript": "^6.0.3" },
+  "engines": { "bun": ">=1.2.19" }
+}
