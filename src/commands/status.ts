@@ -1,3 +1,4 @@
+import { RealClock } from "../clock.ts"
 import { Layout } from "../layout.ts"
 import { TaskStateStore } from "../orchestrator/state-store.ts"
 import type { TaskRuntimeState } from "../types.ts"
@@ -17,7 +18,7 @@ export interface StatusSnapshot {
 }
 
 export function buildStatus(layout: Layout, maxParallelTabs: number): StatusSnapshot {
-  const store = new TaskStateStore(layout)
+  const store = new TaskStateStore(layout, new RealClock())
   const all = store.listAll()
   const counts = {
     planned: 0, running: 0, paused: 0, done: 0, failed: 0, archived: 0,

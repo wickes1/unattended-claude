@@ -47,12 +47,13 @@ function setup(startIso = "2026-05-23T22:30:00.000Z"): Setup {
   const dir = mkdtempSync(join(tmpdir(), "ucl-orch-"))
   const layout = new Layout(dir)
   ensureDir(layout.stateDir)
+  const clock = new SimClock(new Date(startIso))
   return {
     dir,
     layout,
-    clock: new SimClock(new Date(startIso)),
+    clock,
     log: new MemoryLogger(),
-    store: new TaskStateStore(layout),
+    store: new TaskStateStore(layout, clock),
   }
 }
 

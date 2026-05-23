@@ -71,7 +71,7 @@ describe("e2e milestone — paused (rate-limit) → resumed → done → archive
     expect(docs0[0]!.workdir).toBe(layout.taskWorkdir(taskId))
 
     const cfg = testConfig({ runtimeDir })
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, clock)
 
     // ── 3. WINDOW 1: rate-limit beyond window → task pauses ─────────────
     // Window is 5 minutes wide; the rate-limit fires with resumeAt 60min out,

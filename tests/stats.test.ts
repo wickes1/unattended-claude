@@ -10,6 +10,7 @@ import {
   sumTokensFromJsonl,
 } from "../src/commands/stats.ts"
 import { appendEvent } from "../src/events.ts"
+import { RealClock } from "../src/clock.ts"
 import { Layout, fmtDate } from "../src/layout.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
 import type { Event } from "../src/types.ts"
@@ -211,7 +212,7 @@ describe("buildStats", () => {
       JSON.stringify({ message: { usage: { input_tokens: 100, output_tokens: 50 } } }) + "\n",
     )
 
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     store.init("2026-05-23-01-a", "/tmp/wd", sessionUuid)
     // last_updated is set to "now" inside init via constructor; trigger an update so it refreshes.
     await store.update("2026-05-23-01-a", (st) => {
@@ -237,7 +238,7 @@ describe("buildStats", () => {
       JSON.stringify({ message: { usage: { input_tokens: 999, output_tokens: 1 } } }) + "\n",
     )
 
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     store.init("2026-01-01-01-old", "/tmp/wd", sessionUuid)
     // last_updated is from init (now-ish on this machine), but we use a `now` far in the future
     // so 7-day window won't include it. To force this deterministically, hand-write the state file.
@@ -448,7 +449,7 @@ describe("buildStats: usage_snapshot events (F05)", () => {
       JSON.stringify({ message: { usage: { input_tokens: 100, output_tokens: 50 } } }) + "\n",
     )
 
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     store.init("2026-05-23-01-legacy", "/tmp/wd", sessionUuid)
     await store.update("2026-05-23-01-legacy", (st) => {
       st.state = "done"
@@ -474,7 +475,7 @@ describe("buildStats: usage_snapshot events (F05)", () => {
       join(sub, `${staleUuid}.jsonl`),
       JSON.stringify({ message: { usage: { input_tokens: 9_999, output_tokens: 0 } } }) + "\n",
     )
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     store.init("2026-05-23-01-stale", "/tmp/wd", staleUuid)
     await store.update("2026-05-23-01-stale", (st) => {
       st.state = "done"

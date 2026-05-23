@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { RealClock } from "../src/clock.ts"
 import { buildStatus, renderStatus } from "../src/commands/status.ts"
 import { Layout } from "../src/layout.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
@@ -40,7 +41,7 @@ describe("buildStatus", () => {
 
   it("counts mixed states correctly", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await seed(store, "2026-05-23-01-a", "planned")
     await seed(store, "2026-05-23-02-b", "running")
     await seed(store, "2026-05-23-03-c", "running")
@@ -56,7 +57,7 @@ describe("buildStatus", () => {
 
   it("returns paused tasks separately", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await seed(store, "2026-05-23-01-a", "paused", { paused_reason: "weekly-limit" })
     await seed(store, "2026-05-23-02-b", "running")
     const snap = buildStatus(layout, 3)
@@ -67,7 +68,7 @@ describe("buildStatus", () => {
 
   it("recentDone returns at most 5, sorted by last_updated desc", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     // Seed 7 done tasks with strictly increasing last_updated by waiting between updates.
     const ids: string[] = []
     for (let i = 0; i < 7; i++) {
@@ -91,7 +92,7 @@ describe("buildStatus", () => {
 
   it("recentDone includes both done and failed", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await seed(store, "2026-05-23-01-a", "done")
     await new Promise((r) => setTimeout(r, 2))
     await seed(store, "2026-05-23-02-b", "failed")
@@ -112,7 +113,7 @@ describe("renderStatus", () => {
 
   it("shows paused_reason and (N compactions) when N > 0", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await seed(store, "2026-05-23-01-a", "paused", {
       paused_reason: "context-full",
       compactions: 3,
@@ -125,7 +126,7 @@ describe("renderStatus", () => {
 
   it("does not show compactions clause when context_compactions is 0", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await seed(store, "2026-05-23-01-a", "paused", {
       paused_reason: "rate-limit-5h",
       compactions: 0,
@@ -138,7 +139,7 @@ describe("renderStatus", () => {
 
   it("shows Cap: M/N line", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await seed(store, "2026-05-23-01-a", "running")
     await seed(store, "2026-05-23-02-b", "running")
     const snap = buildStatus(layout, 3)
@@ -148,7 +149,7 @@ describe("renderStatus", () => {
 
   it("includes in-flight rows with episode + last_updated", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await seed(store, "2026-05-23-01-a", "running", { episode: 2 })
     const snap = buildStatus(layout, 3)
     const out = renderStatus(snap)

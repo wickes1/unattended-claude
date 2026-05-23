@@ -7,6 +7,7 @@ import {
   parsePlanArgs,
   planPreflight,
 } from "../src/commands/plan.ts"
+import { RealClock } from "../src/clock.ts"
 import { Layout } from "../src/layout.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
 
@@ -37,7 +38,7 @@ describe("planPreflight", () => {
 
   it("returns null when only non-running tasks exist", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     store.init("2026-05-23-01-a", "/tmp/w/a", "uuid-a")
     await store.update("2026-05-23-01-a", (s) => { s.state = "paused" })
     store.init("2026-05-23-02-b", "/tmp/w/b", "uuid-b")
@@ -47,7 +48,7 @@ describe("planPreflight", () => {
 
   it("returns refusal string containing task id when one is running", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     store.init("2026-05-23-01-running-task", "/tmp/w/r", "uuid-r")
     await store.update("2026-05-23-01-running-task", (s) => { s.state = "running" })
     const r = planPreflight(layout)
@@ -59,7 +60,7 @@ describe("planPreflight", () => {
 
   it("lists multiple running task ids in the refusal string", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     store.init("2026-05-23-01-a", "/tmp/w/a", "uuid-a")
     await store.update("2026-05-23-01-a", (s) => { s.state = "running" })
     store.init("2026-05-23-02-b", "/tmp/w/b", "uuid-b")

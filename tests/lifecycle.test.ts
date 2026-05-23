@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Layout } from "../src/layout.ts"
 import { ensureDir } from "../src/fs-utils.ts"
+import { RealClock } from "../src/clock.ts"
 import { MemoryLogger } from "../src/logger.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
 import { WeeklyLimitGate } from "../src/orchestrator/rate-limit.ts"
@@ -131,7 +132,7 @@ describe("installSignalHandlers", () => {
 describe("suspendForShutdown", () => {
   test("marks running tasks as paused and writes task_paused events", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
 
     store.init("2026-05-23-01-a", "/tmp/w/a", "uuid-a")
     store.init("2026-05-23-02-b", "/tmp/w/b", "uuid-b")
@@ -151,7 +152,7 @@ describe("suspendForShutdown", () => {
 
   test("ignores non-running tasks (planned/done/failed unchanged)", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
 
     store.init("2026-05-23-01-planned", "/tmp/w", "uuid-1")
     store.init("2026-05-23-02-done", "/tmp/w", "uuid-2")
@@ -173,7 +174,7 @@ describe("suspendForShutdown", () => {
 describe("findResumableTasks", () => {
   test("returns paused tasks in FIFO by last_updated", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const gate = new WeeklyLimitGate(layout)
 
     store.init("2026-05-23-01-a", "/tmp/w", "uuid-a")
@@ -199,7 +200,7 @@ describe("findResumableTasks", () => {
 
   test("excludes weekly-limit paused tasks when weekly gate is blocked", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const gate = new WeeklyLimitGate(layout)
 
     // Trip the weekly gate for an hour in the future.
@@ -217,7 +218,7 @@ describe("findResumableTasks", () => {
 
   test("includes weekly-limit paused tasks when weekly gate is clear", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const gate = new WeeklyLimitGate(layout)
 
     store.init("2026-05-23-01-a", "/tmp/w", "uuid-a")
@@ -235,7 +236,7 @@ describe("findResumableTasks", () => {
 describe("findOrphans", () => {
   test("returns task IDs whose state=running but tab name not in liveTabs", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
 
     store.init("2026-05-23-01-alive", "/tmp/w", "u1")
     store.init("2026-05-23-02-orphan", "/tmp/w", "u2")
@@ -251,7 +252,7 @@ describe("findOrphans", () => {
 
   test("returns empty when all running tasks are live", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
 
     store.init("2026-05-23-01-a", "/tmp/w", "u1")
     await store.update("2026-05-23-01-a", (s) => { s.state = "running" })
@@ -261,7 +262,7 @@ describe("findOrphans", () => {
 
   test("returns empty when no tasks are running", () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     expect(findOrphans(store, new Set())).toEqual([])
   })
 })

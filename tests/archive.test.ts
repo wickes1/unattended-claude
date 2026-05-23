@@ -12,6 +12,7 @@ import {
 import { readEvents } from "../src/events.ts"
 import { ensureDir } from "../src/fs-utils.ts"
 import { Layout } from "../src/layout.ts"
+import { RealClock } from "../src/clock.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
 import type { TaskRuntimeState } from "../src/types.ts"
 
@@ -27,7 +28,7 @@ function seedFullTask(layout: Layout, id: string): void {
   ensureDir(layout.handoffsDir)
   ensureDir(layout.workdirsDir)
   writeFileSync(layout.taskDocFile(id), `# task ${id}\n`)
-  const store = new TaskStateStore(layout)
+  const store = new TaskStateStore(layout, new RealClock())
   store.init(id, layout.taskWorkdir(id), "uuid-" + id)
   writeFileSync(layout.handoffFile(id), `handoff ${id}\n`)
   ensureDir(layout.taskWorkdir(id))

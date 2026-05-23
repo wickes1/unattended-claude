@@ -1,19 +1,22 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { atomicWrite, ensureDir } from "../fs-utils.ts"
 import type { Layout } from "../layout.ts"
-import type { TaskRuntimeState } from "../types.ts"
+import type { Clock, TaskRuntimeState } from "../types.ts"
 
 /**
  * Per-task state store with per-id async mutex chain.
  *
  * Concurrent updates to the same task ID are serialized; updates to
  * different IDs run in parallel. Writes are atomic (.tmp + rename).
+ *
+ * The `clock` dependency is used for `update()`'s `last_updated` stamp so
+ * SimClock-driven tests can control time end-to-end.
  */
 export class TaskStateStore {
   /** Per-id promise chain. Each id has its own serialization. */
   private chains = new Map<string, Promise<unknown>>()
 
-  constructor(private layout: Layout) {}
+  constructor(private layout: Layout, private clock: Clock) {}
 
   /** Read the current state from disk (no mutex; callers must coordinate). */
   load(id: string): TaskRuntimeState | null {
@@ -39,7 +42,7 @@ export class TaskStateStore {
       const cur = this.load(id)
       if (!cur) throw new Error(`task state not initialized: ${id}`)
       const r = fn(cur)
-      cur.last_updated = new Date().toISOString()
+      cur.last_updated = this.clock.now().toISOString()
       ensureDir(this.layout.taskStatesDir)
       atomicWrite(this.layout.taskStateFile(id), JSON.stringify(cur, null, 2))
       return r

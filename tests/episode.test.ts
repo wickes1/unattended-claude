@@ -47,7 +47,7 @@ function setup(): Setup {
   const layout = new Layout(dir)
   const clock = new SimClock(new Date("2026-05-23T22:30:00.000Z"))
   const log = new MemoryLogger()
-  const store = new TaskStateStore(layout)
+  const store = new TaskStateStore(layout, clock)
   const rateLimitGate = new RateLimitGate()
   const weeklyLimitGate = new WeeklyLimitGate(layout)
   const workdir = layout.taskWorkdir(TASK_ID)

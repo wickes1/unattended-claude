@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { RealClock } from "../clock.ts"
 import type { Config } from "../config.ts"
+import { findRepoDir } from "../git-utils.ts"
 import { Layout } from "../layout.ts"
 import { ConsoleLogger } from "../logger.ts"
 import { launchInteractiveSession } from "../runtime/claude-session.ts"
@@ -26,7 +28,7 @@ export function parsePlanArgs(argv: string[]): PlanArgs {
 
 /** Returns null if OK to proceed; a refusal reason string otherwise. */
 export function planPreflight(layout: Layout): string | null {
-  const store = new TaskStateStore(layout)
+  const store = new TaskStateStore(layout, new RealClock())
   const running = store.listAll().filter((s) => s.state === "running")
   if (running.length > 0) {
     return `Worker is running (${running.length} task(s) in flight: ${running.map((s) => s.task_id).join(", ")}). Run \`ucl stop\` first, or use \`ucl plan --force\` to override.`
@@ -35,15 +37,8 @@ export function planPreflight(layout: Layout): string | null {
 }
 
 /** v2 repo dir — claude must be launched from here so .claude/skills/task-brief loads. */
-function findRepoDir(): string {
-  // walk up from import.meta.dir looking for .claude/skills directory
-  let dir = import.meta.dir
-  for (let i = 0; i < 6; i++) {
-    if (existsSync(join(dir, ".claude", "skills"))) return dir
-    dir = join(dir, "..")
-  }
-  // fallback: parent of src/commands
-  return join(import.meta.dir, "..", "..")
+function findThisRepoDir(): string {
+  return findRepoDir(import.meta.dir) ?? join(import.meta.dir, "..", "..")
 }
 
 /** Build the initial prompt that triggers task-brief skill. */
@@ -73,7 +68,7 @@ export async function cmdPlan(cfg: Config, argv: string[]): Promise<void> {
   }
 
   const sessionName = `unattended-claude-plan-${Date.now()}`
-  const cwd = findRepoDir()
+  const cwd = findThisRepoDir()
   const initialMessage = buildPlanInitialPrompt(layout)
   try {
     await launchInteractiveSession(sessionName, cwd, initialMessage, cfg, log)
