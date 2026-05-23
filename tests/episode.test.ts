@@ -264,6 +264,55 @@ describe("applyResult: lost", () => {
   })
 })
 
+// ── F01: discoveredSessionId persistence ─────────────────────────────
+
+describe("applyResult: discoveredSessionId (F01 Happy mode)", () => {
+  it("persists discoveredSessionId onto TaskRuntimeState.claude_session_id", async () => {
+    const s = setup()
+    const DISCOVERED = "4765a36e-0e9f-4b09-9779-8f185d20ac6b"
+    const runtime = new MockRuntime([
+      (opts) => {
+        // Mimic happy first-launch result.
+        const sentinelPath = opts.sentinelFile
+        // No file write needed for applyResult test; we hand-craft the result.
+        void sentinelPath
+        s.clock.advance(60_000)
+        return {
+          status: "completed",
+          durationMs: 60_000,
+          discoveredSessionId: DISCOVERED,
+        }
+      },
+    ])
+    const ctx = makeCtx(s, runtime)
+
+    const before = s.store.load(TASK_ID)!
+    expect(before.claude_session_id).toBe(SESSION_ID)
+
+    const result = await runEpisode(s.task, before, ctx, s.promptFile, null)
+    expect(result.status).toBe("completed")
+    expect(result.discoveredSessionId).toBe(DISCOVERED)
+
+    await applyResult(s.task, result, ctx)
+
+    const after = s.store.load(TASK_ID)!
+    expect(after.claude_session_id).toBe(DISCOVERED)
+    expect(after.state).toBe("done")
+  })
+
+  it("leaves claude_session_id unchanged when discoveredSessionId is absent", async () => {
+    const s = setup()
+    const runtime = new MockRuntime([simComplete(s.clock, { durationMin: 1 })])
+    const ctx = makeCtx(s, runtime)
+
+    const result = await runEpisode(s.task, s.store.load(TASK_ID)!, ctx, s.promptFile, null)
+    await applyResult(s.task, result, ctx)
+
+    const after = s.store.load(TASK_ID)!
+    expect(after.claude_session_id).toBe(SESSION_ID)
+  })
+})
+
 // ── Helper tests ─────────────────────────────────────────────────────
 
 describe("buildInvokeOpts: resume flag", () => {

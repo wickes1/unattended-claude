@@ -19,6 +19,7 @@ import {
   nonEmptyLines,
   PATTERNS,
 } from "./detectors.ts"
+import { discoverViaStatus } from "./session-discovery.ts"
 import {
   capture as realCapture,
   closeTab as realCloseTab,
@@ -96,24 +97,29 @@ export const realZellijOps: ZellijOps = {
  *
  * In v2 the `--dangerously-skip-permissions` flag is NOT hardcoded here — we
  * rely on `cfg.runtime.extraArgs` (set by the `ucl init` template) so the
- * exact arg list is configurable and we avoid double-flagging. The session
- * uuid is always passed: `--session-id <uuid>` on first launch, `--resume <uuid>`
- * on subsequent windows for the same task.
+ * exact arg list is configurable and we avoid double-flagging.
  *
- * Spike result 2026-05-23: `happy --session-id <uuid>` does NOT honor the
- * provided uuid — Happy stores its own conversation uuid that differs from
- * the value passed through. `claude --session-id <uuid>` works as expected
- * (creates `~/.claude/projects/.../<uuid>.jsonl` directly). For v2, set
- * `cfg.runtime.bin = "claude"` so resume semantics are correct. Happy can
- * still be wrapped at a higher level if mobile observability is desired,
- * but session-id passthrough is broken.
+ * Truth table (F01, 2026-05-23):
+ *   bin=claude, first launch  → `claude --session-id <uuid> <extra>`   (claude honors --session-id)
+ *   bin=claude, resume        → `claude --resume <uuid> <extra>`
+ *   bin=happy,  first launch  → `happy <extra>`                        (NO --session-id; Happy 1.1.8 swallows it)
+ *   bin=happy,  resume        → `happy --resume <uuid> <extra>`        (Happy forwards --resume)
+ *
+ * For bin=happy first launch, opts.claudeSessionId is expected to be empty/unset
+ * (the orchestrator does NOT pre-generate). The discovered UUID is captured
+ * after launch via discoverViaStatus and persisted for subsequent resumes.
  */
 export function buildLaunchCommand(cfg: Config, opts: InvokeOpts): string {
-  const sessionFlag = opts.resume
-    ? `--resume ${opts.claudeSessionId}`
-    : `--session-id ${opts.claudeSessionId}`
-  const args = [sessionFlag, ...cfg.runtime.extraArgs].join(" ")
-  return `${cfg.runtime.bin} ${args}`
+  const flags: string[] = []
+  if (opts.resume) {
+    flags.push(`--resume ${opts.claudeSessionId}`)
+  } else if (cfg.runtime.bin !== "happy") {
+    // bin=claude (or any non-happy bin) first launch: pre-gen UUID flows through.
+    flags.push(`--session-id ${opts.claudeSessionId}`)
+  }
+  // bin=happy first launch: emit no session flag — Happy swallows --session-id.
+  const args = [...flags, ...cfg.runtime.extraArgs].join(" ")
+  return `${cfg.runtime.bin} ${args}`.trim().replace(/ +/g, " ")
 }
 
 /**
@@ -336,6 +342,32 @@ export async function runClaudeSession(
       return { status: "error", reason: "dialog timeout" }
     }
 
+    // S4b — Happy first-launch session-UUID discovery (F01).
+    //
+    // Happy 1.1.8 swallows --session-id, so for the first episode we must
+    // scrape the UUID off the /status panel. claude bin doesn't need this
+    // (pre-gen via --session-id is honored); resume doesn't need it either
+    // (UUID is already on TaskRuntimeState from the previous episode).
+    let discoveredSessionId: string | null = null
+    if (cfg.runtime.bin === "happy" && !opts.resume) {
+      try {
+        discoveredSessionId = await discoverViaStatus(
+          z,
+          opts.parentSession,
+          opts.tabName,
+          clock,
+          log,
+        )
+      } catch (e) {
+        // Discovery is mandatory for happy first launch — without it the next
+        // episode cannot resume. Fail the episode loudly so the user sees it.
+        return {
+          status: "error",
+          reason: `session-id discovery failed: ${String(e instanceof Error ? e.message : e)}`,
+        }
+      }
+    }
+
     // S5a — wake-up prompt (resume only)
     if (opts.resume && opts.wakeUpPrompt !== null) {
       await z.sendText(opts.parentSession, opts.tabName, opts.wakeUpPrompt)
@@ -352,6 +384,11 @@ export async function runClaudeSession(
     if (result.status !== "rate_limited" && result.status !== "weekly_limited") {
       await z.sendKeys(opts.parentSession, opts.tabName, "/exit", "Enter")
       await sleep(2000)
+    }
+    // Attach the discovered UUID (if any) so the orchestrator can persist it
+    // onto TaskRuntimeState for the next episode's --resume.
+    if (discoveredSessionId !== null) {
+      return { ...result, discoveredSessionId }
     }
     return result
   } finally {
