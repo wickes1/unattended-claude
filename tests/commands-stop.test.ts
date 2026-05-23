@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { cmdStop, parseStopArgs } from "../src/commands/stop.ts"
@@ -60,4 +60,37 @@ describe("cmdStop", () => {
   // NOTE: Testing the SIGTERM/SIGKILL paths against a live process would
   // require spawning a child and is covered by T23 e2e tests. Unit-level
   // coverage is the args parsing + no-lockfile + stale-lockfile paths.
+
+  it("--now writes the stop-now flag before SIGKILL so orphan recovery can attribute it", async () => {
+    // The flag is only meaningful on the SIGKILL escalation path. Spawn a
+    // child that ignores SIGTERM so cmdStop is forced into the SIGKILL branch.
+    const layout = freshLayout()
+    mkdirSync(dirname(layout.lockFile), { recursive: true })
+    const child = Bun.spawn(
+      [
+        "node",
+        "-e",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    )
+    writeFileSync(layout.lockFile, String(child.pid))
+    try {
+      // Give node a moment to register its SIGTERM handler before cmdStop
+      // sends the signal — otherwise the default behavior (exit) wins and
+      // we never hit the SIGKILL branch this test exercises.
+      await new Promise((r) => setTimeout(r, 300))
+      const logs: string[] = []
+      const result = await cmdStop(layout, ["--now"], (s) => logs.push(s))
+      expect(result.killed).toBe(true)
+      expect(result.pid).toBe(child.pid)
+      // We must have hit the SIGKILL branch (otherwise the flag would not be
+      // written, which is the design — SIGTERM-only flow goes through the
+      // orchestrator's signal handler instead).
+      expect(logs.some((l) => l.includes("Escalated to SIGKILL"))).toBe(true)
+      expect(existsSync(layout.stopNowFlagFile)).toBe(true)
+    } finally {
+      try { child.kill("SIGKILL") } catch { /* already dead */ }
+    }
+  })
 })

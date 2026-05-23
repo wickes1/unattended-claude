@@ -1,23 +1,27 @@
-import { readdirSync, unlinkSync, writeFileSync } from "node:fs"
+import { readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
 import { homedir } from "node:os"
+import { parseDocument, type Document } from "yaml"
 import { ensureDir } from "../fs-utils.ts"
 import type { Config, ScheduleWindow } from "../config.ts"
 import { parseHHMM } from "../schedule.ts"
 
-export const helpText = `Usage: ucl schedule <list|install|uninstall> [--bin <path>]
+export const helpText = `Usage: ucl schedule <list|add|remove|install|uninstall> [--bin <path>]
 
 Manage macOS launchd entries for scheduled \`ucl run\` invocations.
 
-  list        Print configured windows and currently-installed plist labels
-  install     Write a plist for each window in config.schedule.windows
-              and launchctl-load them
-  uninstall   launchctl-unload and remove all unattended-claude plists
+  list                  Print configured windows and currently-installed plist labels
+  add HH:MM HH:MM       Append a window to config.schedule.windows and reinstall plists.
+                        Days default to mon..sun; override with --days mon,tue,wed
+  remove N              Remove the Nth window (1-indexed) and reinstall plists
+  install               Write a plist for each window in config.schedule.windows
+                        and launchctl-load them
+  uninstall             launchctl-unload and remove all unattended-claude plists
 
-Options for install:
-  --bin <path>  Override the binary path written into ProgramArguments.
-                Useful when installing from a build dir but the binary will
-                live elsewhere (e.g. /opt/local/bin/ucl).
+Options for install (also accepted by add/remove since they re-install):
+  --bin <path>          Override the binary path written into ProgramArguments.
+                        Useful when installing from a build dir but the binary
+                        will live elsewhere (e.g. /opt/local/bin/ucl).
 
 Plists go in ~/Library/LaunchAgents/ with labels dev.unattended-claude.<start>-<end>.plist
 `
@@ -164,6 +168,18 @@ function takeBinFlag(argv: string[]): { binOverride: string | undefined; rest: s
   return { binOverride, rest: out }
 }
 
+/** Resolve the final ProgramArguments prefix: --bin > caller > auto-detect. */
+function resolvePrefixFor(
+  binOverride: string | undefined,
+  programPrefix: string | string[] | undefined,
+): string[] {
+  if (binOverride) return [binOverride]
+  if (programPrefix !== undefined) {
+    return Array.isArray(programPrefix) ? programPrefix : [programPrefix]
+  }
+  return resolveProgramPrefix()
+}
+
 /** Sub-command dispatch. */
 export async function cmdSchedule(
   cfg: Config,
@@ -183,14 +199,27 @@ export async function cmdSchedule(
   const sub = rest[0]
   if (sub === "list") return cmdScheduleList(cfg, log, ops)
   if (sub === "install") {
-    const prefix = binOverride
-      ? [binOverride]
-      : programPrefix !== undefined
-        ? (Array.isArray(programPrefix) ? programPrefix : [programPrefix])
-        : resolveProgramPrefix()
-    return cmdScheduleInstall(cfg, log, ops, prefix)
+    return cmdScheduleInstall(cfg, log, ops, resolvePrefixFor(binOverride, programPrefix))
   }
   if (sub === "uninstall") return cmdScheduleUninstall(log, ops)
+  if (sub === "add") {
+    return cmdScheduleAdd(
+      cfg,
+      rest.slice(1),
+      log,
+      ops,
+      resolvePrefixFor(binOverride, programPrefix),
+    )
+  }
+  if (sub === "remove") {
+    return cmdScheduleRemove(
+      cfg,
+      rest.slice(1),
+      log,
+      ops,
+      resolvePrefixFor(binOverride, programPrefix),
+    )
+  }
   log(helpText)
 }
 
@@ -235,4 +264,148 @@ function cmdScheduleUninstall(log: (s: string) => void, ops: ScheduleOps): void 
     try { unlinkSync(path) } catch { /* ignore */ }
     log(`removed  ${path}`)
   }
+}
+
+// ─── add / remove ────────────────────────────────────────────────────────────
+// Both subcommands edit the on-disk YAML (cfg.configPath) and reinstall plists
+// so the change is immediately effective.
+
+const VALID_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const
+const ALL_DAYS = [...VALID_DAYS]
+
+function parseDaysArg(s: string): string[] {
+  const out = s.split(",").map((d) => d.trim().toLowerCase()).filter((d) => d.length > 0)
+  for (const d of out) {
+    if (!(VALID_DAYS as readonly string[]).includes(d)) {
+      throw new Error(
+        `unknown day "${d}" — expected one of: ${VALID_DAYS.join(", ")}`,
+      )
+    }
+  }
+  return out
+}
+
+/** Take `--days mon,tue,...` out of argv. Throws on unknown day names. */
+function takeDaysFlag(argv: string[]): { days: string[] | undefined; rest: string[] } {
+  const out: string[] = []
+  let days: string[] | undefined
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--days" && argv[i + 1]) {
+      days = parseDaysArg(argv[i + 1]!)
+      i++
+      continue
+    }
+    out.push(argv[i]!)
+  }
+  return { days, rest: out }
+}
+
+/**
+ * Validate HH:MM. We only assert format here — overnight windows where
+ * start > end are legal (see src/schedule.ts:activeWindow), so the relative
+ * ordering is intentionally NOT checked.
+ */
+function assertHHMM(s: string): void {
+  parseHHMM(s) // throws on bad format
+}
+
+/**
+ * Read-modify-write the user's cc.yaml at cfg.configPath, mutating
+ * `schedule.windows` via the supplied callback. Uses yaml.parseDocument so
+ * comments and unrelated keys survive the round-trip. Returns the new windows
+ * array (so the caller can immediately re-install plists without reloading).
+ */
+function updateScheduleYaml(
+  configPath: string,
+  mutate: (windows: ScheduleWindow[]) => ScheduleWindow[],
+): ScheduleWindow[] {
+  const src = readFileSync(configPath, "utf8")
+  const doc: Document = parseDocument(src)
+  // Materialize the full document as plain JS, then pluck schedule.windows.
+  // This sidesteps the awkward Node.toJS(doc, ...) signature for the AST node
+  // returned by doc.getIn.
+  const asJs = (doc.toJS() ?? {}) as { schedule?: { windows?: ScheduleWindow[] } }
+  const curJs: ScheduleWindow[] = asJs.schedule?.windows ?? []
+  const next = mutate([...curJs])
+
+  if (!doc.hasIn(["schedule"])) {
+    doc.setIn(["schedule"], { windows: next })
+  } else {
+    doc.setIn(["schedule", "windows"], next)
+  }
+
+  writeFileSync(configPath, doc.toString())
+  return next
+}
+
+function cmdScheduleAdd(
+  cfg: Config,
+  argv: string[],
+  log: (s: string) => void,
+  ops: ScheduleOps,
+  programPrefix: string[],
+): void {
+  const { days: daysOverride, rest } = takeDaysFlag(argv)
+  const [start, end] = rest
+  if (!start || !end) {
+    log("Usage: ucl schedule add HH:MM HH:MM [--days mon,tue,...]")
+    return
+  }
+  try {
+    assertHHMM(start)
+    assertHHMM(end)
+  } catch (e) {
+    log(`schedule add: ${String(e)}`)
+    return
+  }
+  const days = daysOverride ?? ALL_DAYS
+  const window: ScheduleWindow = { start, end, days }
+
+  const next = updateScheduleYaml(cfg.configPath, (windows) => [...windows, window])
+  log(`added  ${start} → ${end}  days=[${days.join(",")}]`)
+
+  // Re-install plists from the new in-memory cfg view.
+  cfg.schedule.windows = next
+  cmdScheduleInstall(cfg, log, ops, programPrefix)
+}
+
+function cmdScheduleRemove(
+  cfg: Config,
+  argv: string[],
+  log: (s: string) => void,
+  ops: ScheduleOps,
+  programPrefix: string[],
+): void {
+  const [nStr] = argv
+  if (!nStr) {
+    log("Usage: ucl schedule remove N  (1-indexed; see `ucl schedule list`)")
+    return
+  }
+  const n = Number(nStr)
+  if (!Number.isInteger(n) || n <= 0) {
+    log(`schedule remove: N must be a positive integer (got "${nStr}")`)
+    return
+  }
+  const windows = cfg.schedule.windows
+  if (windows.length === 0) {
+    log("schedule remove: no windows configured.")
+    return
+  }
+  if (n > windows.length) {
+    log(`schedule remove: N=${n} is out of range (only ${windows.length} window(s) configured).`)
+    return
+  }
+
+  const removed = windows[n - 1]!
+  const next = updateScheduleYaml(cfg.configPath, (ws) => {
+    ws.splice(n - 1, 1)
+    return ws
+  })
+  log(`removed  #${n}  ${removed.start} → ${removed.end}  days=[${removed.days.join(",")}]`)
+
+  // Re-install (which is really "rewrite all plists"). Uninstall first so that
+  // a removed window's plist actually gets cleared from disk.
+  cfg.schedule.windows = next
+  cmdScheduleUninstall(log, ops)
+  cmdScheduleInstall(cfg, log, ops, programPrefix)
 }

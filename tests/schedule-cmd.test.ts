@@ -253,6 +253,230 @@ describe("cmdSchedule help", () => {
     await cmdSchedule(cfg, ["bogus"], (s) => logsUnknown.push(s), ops)
     expect(logsUnknown.some((l) => l.includes("Usage: ucl schedule"))).toBe(true)
   })
+
+  it("helpText mentions add and remove subcommands", () => {
+    // The helpText is the contract for `ucl schedule --help`; once add/remove
+    // exist they MUST be documented here.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { helpText } = require("../src/commands/schedule.ts")
+    expect(helpText).toMatch(/\badd\b/)
+    expect(helpText).toMatch(/\bremove\b/)
+  })
+})
+
+// ─── F11: schedule add / remove ──────────────────────────────────────────────
+
+/** Helper: write a minimal cc.yaml with the given windows and return the path. */
+function writeConfigYaml(dir: string, windows: ScheduleWindow[]): string {
+  const path = join(dir, "cc.yaml")
+  const lines = [
+    "# user comment we want to preserve",
+    "paths:",
+    "  runtime_dir: ~/unattended",
+    "execution:",
+    "  max_parallel_tabs: 3",
+    "schedule:",
+    "  windows:",
+  ]
+  if (windows.length === 0) {
+    // Use flow-style `[]` to mirror the template's "no windows" shape.
+    lines[lines.length - 1] = "  windows: []"
+  } else {
+    for (const w of windows) {
+      lines.push(`    - { start: "${w.start}", end: "${w.end}", days: [${w.days.join(", ")}] }`)
+    }
+  }
+  writeFileSync(path, lines.join("\n") + "\n")
+  return path
+}
+
+describe("cmdSchedule add — F11", () => {
+  it("appends a new window to schedule.windows in the YAML and reinstalls plists", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops, loadCalls } = fakeOps(launchAgentsDir)
+    const configPath = writeConfigYaml(ymlDir, [])
+    const cfg = testConfig({
+      configPath,
+      schedule: { windows: [] },
+    })
+
+    const logs: string[] = []
+    await cmdSchedule(
+      cfg,
+      ["add", "09:00", "12:00"],
+      (s) => logs.push(s),
+      ops,
+      "/usr/local/bin/ucl",
+    )
+
+    // 1. YAML on disk now has exactly one window.
+    const raw = readFileSync(configPath, "utf8")
+    expect(raw).toMatch(/start:\s*"?09:00"?/)
+    expect(raw).toMatch(/end:\s*"?12:00"?/)
+
+    // 2. A plist file was written for the new window.
+    const expectedPlist = join(launchAgentsDir, "dev.unattended-claude.0900-1200.plist")
+    expect(existsSync(expectedPlist)).toBe(true)
+    expect(loadCalls).toContain(expectedPlist)
+
+    // 3. Comment from the original YAML survives the round-trip.
+    expect(raw).toContain("# user comment we want to preserve")
+
+    // 4. Friendly log.
+    expect(logs.some((l) => l.includes("added"))).toBe(true)
+  })
+
+  it("supports --days override", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops } = fakeOps(launchAgentsDir)
+    const configPath = writeConfigYaml(ymlDir, [])
+    const cfg = testConfig({ configPath, schedule: { windows: [] } })
+
+    const logs: string[] = []
+    await cmdSchedule(
+      cfg,
+      ["add", "09:00", "12:00", "--days", "mon,wed,fri"],
+      (s) => logs.push(s),
+      ops,
+      "/usr/local/bin/ucl",
+    )
+
+    const raw = readFileSync(configPath, "utf8")
+    expect(raw).toMatch(/mon/)
+    expect(raw).toMatch(/wed/)
+    expect(raw).toMatch(/fri/)
+    expect(raw).not.toMatch(/\btue\b/)
+  })
+
+  it("defaults to all 7 days when --days is omitted", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops } = fakeOps(launchAgentsDir)
+    const configPath = writeConfigYaml(ymlDir, [])
+    const cfg = testConfig({ configPath, schedule: { windows: [] } })
+
+    await cmdSchedule(
+      cfg,
+      ["add", "09:00", "12:00"],
+      () => {},
+      ops,
+      "/usr/local/bin/ucl",
+    )
+    const raw = readFileSync(configPath, "utf8")
+    for (const d of ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]) {
+      expect(raw).toMatch(new RegExp(`\\b${d}\\b`))
+    }
+  })
+
+  it("logs usage and does NOT mutate the file when start/end missing", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops } = fakeOps(launchAgentsDir)
+    const configPath = writeConfigYaml(ymlDir, [])
+    const before = readFileSync(configPath, "utf8")
+    const cfg = testConfig({ configPath, schedule: { windows: [] } })
+
+    const logs: string[] = []
+    await cmdSchedule(cfg, ["add", "09:00"], (s) => logs.push(s), ops, "/usr/local/bin/ucl")
+
+    expect(readFileSync(configPath, "utf8")).toBe(before)
+    expect(logs.some((l) => l.includes("Usage: ucl schedule add"))).toBe(true)
+  })
+
+  it("rejects malformed HH:MM and does NOT mutate the file", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops } = fakeOps(launchAgentsDir)
+    const configPath = writeConfigYaml(ymlDir, [])
+    const before = readFileSync(configPath, "utf8")
+    const cfg = testConfig({ configPath, schedule: { windows: [] } })
+
+    const logs: string[] = []
+    await cmdSchedule(cfg, ["add", "9am", "noon"], (s) => logs.push(s), ops, "/usr/local/bin/ucl")
+    expect(readFileSync(configPath, "utf8")).toBe(before)
+    expect(logs.some((l) => l.includes("schedule add:"))).toBe(true)
+  })
+})
+
+describe("cmdSchedule remove — F11", () => {
+  it("removes the Nth window (1-indexed) and reinstalls plists", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops, loadCalls, unloadCalls } = fakeOps(launchAgentsDir)
+    const w1: ScheduleWindow = { start: "09:00", end: "12:00", days: ["mon"] }
+    const w2: ScheduleWindow = { start: "13:00", end: "17:00", days: ["mon"] }
+    const configPath = writeConfigYaml(ymlDir, [w1, w2])
+    const cfg = testConfig({ configPath, schedule: { windows: [w1, w2] } })
+
+    // Pre-plant both plists on disk so the uninstall step has something to remove.
+    writeFileSync(join(launchAgentsDir, plistFilename(w1)), "<plist/>")
+    writeFileSync(join(launchAgentsDir, plistFilename(w2)), "<plist/>")
+
+    const logs: string[] = []
+    await cmdSchedule(cfg, ["remove", "2"], (s) => logs.push(s), ops, "/usr/local/bin/ucl")
+
+    const raw = readFileSync(configPath, "utf8")
+    expect(raw).toMatch(/12:00/) // w1 still there
+    expect(raw).not.toMatch(/13:00/) // w2 gone
+
+    // Uninstall step removed BOTH plists, install step wrote w1 back.
+    expect(unloadCalls.length).toBeGreaterThan(0)
+    expect(existsSync(join(launchAgentsDir, plistFilename(w1)))).toBe(true)
+    expect(existsSync(join(launchAgentsDir, plistFilename(w2)))).toBe(false)
+    expect(loadCalls).toContain(join(launchAgentsDir, plistFilename(w1)))
+
+    expect(logs.some((l) => l.includes("removed  #2"))).toBe(true)
+  })
+
+  it("errors when N is out of range (does NOT mutate the file)", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops } = fakeOps(launchAgentsDir)
+    const w1: ScheduleWindow = { start: "09:00", end: "12:00", days: ["mon"] }
+    const configPath = writeConfigYaml(ymlDir, [w1])
+    const before = readFileSync(configPath, "utf8")
+    const cfg = testConfig({ configPath, schedule: { windows: [w1] } })
+
+    const logs: string[] = []
+    await cmdSchedule(cfg, ["remove", "99"], (s) => logs.push(s), ops, "/usr/local/bin/ucl")
+    expect(readFileSync(configPath, "utf8")).toBe(before)
+    expect(logs.some((l) => l.includes("out of range"))).toBe(true)
+  })
+
+  it("errors when schedule is empty", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops } = fakeOps(launchAgentsDir)
+    const configPath = writeConfigYaml(ymlDir, [])
+    const cfg = testConfig({ configPath, schedule: { windows: [] } })
+
+    const logs: string[] = []
+    await cmdSchedule(cfg, ["remove", "1"], (s) => logs.push(s), ops, "/usr/local/bin/ucl")
+    expect(logs.some((l) => l.includes("no windows configured"))).toBe(true)
+  })
+
+  it("errors when N is missing or not a positive integer", async () => {
+    const launchAgentsDir = freshDir()
+    const ymlDir = freshDir()
+    const { ops } = fakeOps(launchAgentsDir)
+    const w1: ScheduleWindow = { start: "09:00", end: "12:00", days: ["mon"] }
+    const configPath = writeConfigYaml(ymlDir, [w1])
+    const cfg = testConfig({ configPath, schedule: { windows: [w1] } })
+
+    const usageLogs: string[] = []
+    await cmdSchedule(cfg, ["remove"], (s) => usageLogs.push(s), ops, "/usr/local/bin/ucl")
+    expect(usageLogs.some((l) => l.includes("Usage: ucl schedule remove"))).toBe(true)
+
+    const negLogs: string[] = []
+    await cmdSchedule(cfg, ["remove", "0"], (s) => negLogs.push(s), ops, "/usr/local/bin/ucl")
+    expect(negLogs.some((l) => l.includes("positive integer"))).toBe(true)
+
+    const nanLogs: string[] = []
+    await cmdSchedule(cfg, ["remove", "abc"], (s) => nanLogs.push(s), ops, "/usr/local/bin/ucl")
+    expect(nanLogs.some((l) => l.includes("positive integer"))).toBe(true)
+  })
 })
 
 // ─── F06: ProgramArguments path resolution ────────────────────────────────────

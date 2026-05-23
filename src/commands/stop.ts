@@ -1,6 +1,8 @@
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { Layout } from "../layout.ts"
+import { ensureDir } from "../fs-utils.ts"
 import { isProcessAlive } from "../orchestrator/lifecycle.ts"
+import { dirname } from "node:path"
 
 export const helpText = `Usage: ucl stop [--now]
 
@@ -48,8 +50,16 @@ export async function cmdStop(
     }
     await new Promise((r) => setTimeout(r, 250))
   }
-  // With --now, escalate to SIGKILL
+  // With --now, escalate to SIGKILL. Write the stop-now flag FIRST so that
+  // the next orphan-recovery tick can attribute the abandoned tasks to
+  // "user-stop-now" rather than the generic "orphan" reason.
   if (args.now) {
+    try {
+      ensureDir(dirname(layout.stopNowFlagFile))
+      writeFileSync(layout.stopNowFlagFile, new Date().toISOString())
+    } catch (e) {
+      log(`warn: could not write stop-now flag: ${String(e)}`)
+    }
     try {
       process.kill(pid, "SIGKILL")
       log(`Escalated to SIGKILL (PID ${pid}).`)

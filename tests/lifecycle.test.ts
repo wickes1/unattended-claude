@@ -15,6 +15,7 @@ import {
   findResumableTasks,
   installSignalHandlers,
   isProcessAlive,
+  recoverOrphans,
   releaseLock,
   suspendForShutdown,
 } from "../src/orchestrator/lifecycle.ts"
@@ -234,35 +235,114 @@ describe("findResumableTasks", () => {
 // ── findOrphans ────────────────────────────────────────────────────
 
 describe("findOrphans", () => {
-  test("returns task IDs whose state=running but tab name not in liveTabs", async () => {
+  test("returns task IDs whose state=running", async () => {
     const layout = freshLayout()
     const store = new TaskStateStore(layout, new RealClock())
 
-    store.init("2026-05-23-01-alive", "/tmp/w", "u1")
-    store.init("2026-05-23-02-orphan", "/tmp/w", "u2")
+    store.init("2026-05-23-01-running-a", "/tmp/w", "u1")
+    store.init("2026-05-23-02-running-b", "/tmp/w", "u2")
     store.init("2026-05-23-03-planned", "/tmp/w", "u3")
-    await store.update("2026-05-23-01-alive", (s) => { s.state = "running" })
-    await store.update("2026-05-23-02-orphan", (s) => { s.state = "running" })
+    await store.update("2026-05-23-01-running-a", (s) => { s.state = "running" })
+    await store.update("2026-05-23-02-running-b", (s) => { s.state = "running" })
     // Leave 03-planned in state=planned.
 
-    const live = new Set(["2026-05-23-01-alive"])
-    const orphans = findOrphans(store, live)
-    expect(orphans).toEqual(["2026-05-23-02-orphan"])
-  })
-
-  test("returns empty when all running tasks are live", async () => {
-    const layout = freshLayout()
-    const store = new TaskStateStore(layout, new RealClock())
-
-    store.init("2026-05-23-01-a", "/tmp/w", "u1")
-    await store.update("2026-05-23-01-a", (s) => { s.state = "running" })
-
-    expect(findOrphans(store, new Set(["2026-05-23-01-a"]))).toEqual([])
+    const orphans = findOrphans(store)
+    expect(orphans.sort()).toEqual([
+      "2026-05-23-01-running-a",
+      "2026-05-23-02-running-b",
+    ])
   })
 
   test("returns empty when no tasks are running", () => {
     const layout = freshLayout()
     const store = new TaskStateStore(layout, new RealClock())
-    expect(findOrphans(store, new Set())).toEqual([])
+    expect(findOrphans(store)).toEqual([])
+  })
+
+  test("ignores paused/done/failed tasks", async () => {
+    const layout = freshLayout()
+    const store = new TaskStateStore(layout, new RealClock())
+
+    store.init("2026-05-23-01-paused", "/tmp/w", "u1")
+    store.init("2026-05-23-02-done", "/tmp/w", "u2")
+    store.init("2026-05-23-03-failed", "/tmp/w", "u3")
+    await store.update("2026-05-23-01-paused", (s) => { s.state = "paused"; s.paused_reason = "user-stop" })
+    await store.update("2026-05-23-02-done", (s) => { s.state = "done" })
+    await store.update("2026-05-23-03-failed", (s) => { s.state = "failed" })
+
+    expect(findOrphans(store)).toEqual([])
+  })
+
+  test("signature has only one parameter — TaskStateStore (no Set)", () => {
+    // Compile-level assertion: the function's declared length must be 1.
+    // If a future change re-introduces the dead Set arg, this fails loudly.
+    expect(findOrphans.length).toBe(1)
+  })
+})
+
+// ── recoverOrphans ────────────────────────────────────────────────
+
+describe("recoverOrphans", () => {
+  test("no flag → marks orphans paused with reason=orphan and writes events", async () => {
+    const layout = freshLayout()
+    const store = new TaskStateStore(layout, new RealClock())
+
+    store.init("2026-05-23-01-a", "/tmp/w", "u1")
+    store.init("2026-05-23-02-b", "/tmp/w", "u2")
+    await store.update("2026-05-23-01-a", (s) => { s.state = "running" })
+    await store.update("2026-05-23-02-b", (s) => { s.state = "running" })
+
+    const touched = await recoverOrphans(store, layout, new Date())
+    expect(touched.sort()).toEqual(["2026-05-23-01-a", "2026-05-23-02-b"])
+
+    expect(store.load("2026-05-23-01-a")!.paused_reason).toBe("orphan")
+    expect(store.load("2026-05-23-02-b")!.paused_reason).toBe("orphan")
+
+    const events = readEvents(layout).filter((e) => e.event === "task_paused")
+    expect(events.length).toBe(2)
+    for (const e of events) {
+      expect((e as { reason: string }).reason).toBe("orphan")
+    }
+  })
+
+  test("stop-now flag present → marks orphans paused with reason=user-stop-now and deletes flag", async () => {
+    const layout = freshLayout()
+    const store = new TaskStateStore(layout, new RealClock())
+    ensureDir(layout.stateDir)
+    writeFileSync(layout.stopNowFlagFile, new Date().toISOString())
+
+    store.init("2026-05-23-01-killed", "/tmp/w", "u1")
+    await store.update("2026-05-23-01-killed", (s) => { s.state = "running" })
+
+    const touched = await recoverOrphans(store, layout, new Date())
+    expect(touched).toEqual(["2026-05-23-01-killed"])
+
+    expect(store.load("2026-05-23-01-killed")!.paused_reason).toBe("user-stop-now")
+
+    // Flag must be consumed so a later (unrelated) crash isn't misattributed.
+    expect(existsSync(layout.stopNowFlagFile)).toBe(false)
+
+    const events = readEvents(layout).filter((e) => e.event === "task_paused")
+    expect(events.length).toBe(1)
+    expect((events[0] as { reason: string }).reason).toBe("user-stop-now")
+  })
+
+  test("no orphans + no flag → returns [] and does not write events", async () => {
+    const layout = freshLayout()
+    const store = new TaskStateStore(layout, new RealClock())
+    const touched = await recoverOrphans(store, layout, new Date())
+    expect(touched).toEqual([])
+    expect(readEvents(layout).filter((e) => e.event === "task_paused")).toEqual([])
+  })
+
+  test("no orphans + stop-now flag → flag is still consumed (cleanup)", async () => {
+    const layout = freshLayout()
+    const store = new TaskStateStore(layout, new RealClock())
+    ensureDir(layout.stateDir)
+    writeFileSync(layout.stopNowFlagFile, "x")
+
+    const touched = await recoverOrphans(store, layout, new Date())
+    expect(touched).toEqual([])
+    expect(existsSync(layout.stopNowFlagFile)).toBe(false)
   })
 })
