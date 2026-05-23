@@ -125,6 +125,16 @@ export async function applyResult(
     // fresh handoff written by THIS episode.
     s.handoff_pending = false
 
+    // F01: persist discovered session UUID (only the Happy first-launch path
+    // populates this; for bin=claude / resume it's null/undefined). Doing this
+    // before the switch ensures the next episode resumes off the real UUID
+    // even on context_full (which regenerates the id below — we'd overwrite
+    // discovered with random in that branch, which is correct: context_full
+    // intentionally starts a fresh claude session).
+    if (result.discoveredSessionId) {
+      s.claude_session_id = result.discoveredSessionId
+    }
+
     switch (result.status) {
       case "completed":
         s.state = "done"

@@ -1,0 +1,242 @@
+/**
+ * F01 — Happy-mode session-id discovery integration tests.
+ *
+ * Verifies runClaudeSession's dual-mode behavior:
+ *   - bin=happy, first launch → calls discoverViaStatus, EpisodeResult carries
+ *     the discovered UUID
+ *   - bin=happy, resume       → does NOT call discoverViaStatus (UUID already on state)
+ *   - bin=claude, first launch → does NOT call discoverViaStatus (--session-id works)
+ */
+import { describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { SimClock } from "../src/clock.ts"
+import { MemoryLogger } from "../src/logger.ts"
+import { runClaudeSession, type ZellijOps } from "../src/runtime/claude-session.ts"
+import type { InvokeOpts } from "../src/types.ts"
+import { testConfig } from "./helpers.ts"
+
+interface Call {
+  fn: string
+  args: unknown[]
+}
+
+const STATUS_PANEL_TEXT = `
+  Version:          2.1.150
+  Session ID:       4765a36e-0e9f-4b09-9779-8f185d20ac6b
+  cwd:              /tmp/wd
+  Login method:     Claude Max account
+`.trim()
+
+const DISCOVERED_UUID = "4765a36e-0e9f-4b09-9779-8f185d20ac6b"
+
+function fakeZellij(opts: {
+  captureScript?: (callIdx: number) => string
+} = {}): { z: ZellijOps; calls: Call[] } {
+  const calls: Call[] = []
+  let captureIdx = 0
+  const z: ZellijOps = {
+    async newTab(s, t) {
+      calls.push({ fn: "newTab", args: [s, t] })
+    },
+    async closeTab(s, t) {
+      calls.push({ fn: "closeTab", args: [s, t] })
+    },
+    async sendKeys(s, t, ...keys) {
+      calls.push({ fn: "sendKeys", args: [s, t, ...keys] })
+    },
+    async sendText(s, t, text) {
+      calls.push({ fn: "sendText", args: [s, t, text] })
+    },
+    async pasteFile(s, t, file) {
+      calls.push({ fn: "pasteFile", args: [s, t, file] })
+    },
+    async pipePane(s, t, file) {
+      calls.push({ fn: "pipePane", args: [s, t, file] })
+    },
+    async capture(s, t, lines) {
+      const idx = captureIdx++
+      const text = opts.captureScript ? opts.captureScript(idx) : "❯ "
+      calls.push({ fn: "capture", args: [s, t, lines, text] })
+      return text
+    },
+    async sessionAlive() {
+      return true
+    },
+  }
+  return { z, calls }
+}
+
+function makeOpts(over: Partial<InvokeOpts> = {}): InvokeOpts {
+  return {
+    workdir: "/tmp/wd",
+    promptFile: "/tmp/prompt.md",
+    sentinelFile: "/tmp/state/episode.done",
+    timeoutMs: 60_000,
+    parentSession: "ucl",
+    tabName: "task-1",
+    rawLogFile: "/tmp/raw.log",
+    claudeSessionId: "abc-123",
+    resume: false,
+    windDownAt: null,
+    wakeUpPrompt: null,
+    handoffPath: "/tmp/handoff.md",
+    handoffTimeoutMs: 120_000,
+    ...over,
+  }
+}
+
+describe("runClaudeSession: bin=happy first launch", () => {
+  test("calls discoverViaStatus and attaches discoveredSessionId to result", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ucl-happy-discover-"))
+    try {
+      const sentinel = join(dir, "done")
+      const promptFile = join(dir, "prompt.md")
+      writeFileSync(promptFile, "do the thing")
+      // Scripted captures:
+      //   0   : handleDialogs → "❯ " (already at input prompt, dialog skipped)
+      //   1+  : discoverViaStatus → STATUS_PANEL_TEXT (parses UUID immediately)
+      //   later: pollUntilDone → "❯ " until sentinel appears
+      const { z, calls } = fakeZellij({
+        captureScript: (i) => {
+          if (i === 0) return "❯ " // dialog check
+          if (i === 1) return STATUS_PANEL_TEXT // first capture inside discoverViaStatus
+          if (i >= 4) writeFileSync(sentinel, "done\n")
+          return "❯ "
+        },
+      })
+      const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+      const log = new MemoryLogger()
+      const cfg = testConfig() // bin=happy
+      const result = await runClaudeSession(
+        makeOpts({ sentinelFile: sentinel, promptFile, resume: false }),
+        cfg,
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("completed")
+      expect(result.discoveredSessionId).toBe(DISCOVERED_UUID)
+      // /status was injected
+      const slashStatus = calls.find(
+        (c) => c.fn === "sendText" && /^\/status/.test(String(c.args[2])),
+      )
+      expect(slashStatus).toBeDefined()
+      // Esc was sent to dismiss the panel
+      const esc = calls.find((c) => c.fn === "sendKeys" && c.args[2] === "Esc")
+      expect(esc).toBeDefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("discovery failure → episode result is {status: 'error', reason: 'session-id discovery failed: ...'}", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ucl-happy-fail-"))
+    try {
+      const sentinel = join(dir, "done")
+      const promptFile = join(dir, "prompt.md")
+      writeFileSync(promptFile, "do the thing")
+      const { z } = fakeZellij({
+        // captureScript always returns input prompt, no Session ID present.
+        captureScript: () => "❯ ",
+      })
+      const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+      const log = new MemoryLogger()
+      const cfg = testConfig()
+      const result = await runClaudeSession(
+        makeOpts({ sentinelFile: sentinel, promptFile, resume: false, timeoutMs: 5000 }),
+        cfg,
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("error")
+      if (result.status === "error") {
+        expect(result.reason).toMatch(/session-id discovery failed/)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("runClaudeSession: bin=happy resume", () => {
+  test("does NOT call discoverViaStatus (no /status injection)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ucl-happy-resume-"))
+    try {
+      const sentinel = join(dir, "done")
+      const promptFile = join(dir, "prompt.md")
+      writeFileSync(promptFile, "do the thing")
+      const { z, calls } = fakeZellij({
+        captureScript: (i) => {
+          if (i >= 3) writeFileSync(sentinel, "done\n")
+          return "❯ "
+        },
+      })
+      const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+      const log = new MemoryLogger()
+      const cfg = testConfig()
+      const result = await runClaudeSession(
+        makeOpts({
+          sentinelFile: sentinel,
+          promptFile,
+          resume: true,
+          claudeSessionId: DISCOVERED_UUID,
+          wakeUpPrompt: "continuing",
+        }),
+        cfg,
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("completed")
+      // No /status was sent — bin=happy resume skips discovery.
+      const slashStatus = calls.find(
+        (c) => c.fn === "sendText" && /^\/status/.test(String(c.args[2])),
+      )
+      expect(slashStatus).toBeUndefined()
+      // No discoveredSessionId field on result.
+      expect(result.discoveredSessionId).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("runClaudeSession: bin=claude first launch", () => {
+  test("does NOT call discoverViaStatus (--session-id flows through)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ucl-claude-first-"))
+    try {
+      const sentinel = join(dir, "done")
+      const promptFile = join(dir, "prompt.md")
+      writeFileSync(promptFile, "do the thing")
+      const { z, calls } = fakeZellij({
+        captureScript: (i) => {
+          if (i >= 3) writeFileSync(sentinel, "done\n")
+          return "❯ "
+        },
+      })
+      const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+      const log = new MemoryLogger()
+      const cfg = testConfig({
+        runtime: { driver: "claude", bin: "claude", extraArgs: [] },
+      })
+      const result = await runClaudeSession(
+        makeOpts({ sentinelFile: sentinel, promptFile, resume: false }),
+        cfg,
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("completed")
+      const slashStatus = calls.find(
+        (c) => c.fn === "sendText" && /^\/status/.test(String(c.args[2])),
+      )
+      expect(slashStatus).toBeUndefined()
+      expect(result.discoveredSessionId).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

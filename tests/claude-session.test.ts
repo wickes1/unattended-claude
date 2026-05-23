@@ -92,15 +92,16 @@ function makeOpts(over: Partial<InvokeOpts> = {}): InvokeOpts {
 // ── buildLaunchCommand ──────────────────────────────────────────────
 
 describe("buildLaunchCommand", () => {
-  test("new session: --session-id <uuid> + extra args", () => {
+  // F01 truth table — bin × mode (4 cases).
+  test("bin=happy first launch: NO --session-id (Happy 1.1.8 swallows it)", () => {
     const cfg = testConfig() // bin=happy, extraArgs=["--dangerously-skip-permissions"]
     const opts = makeOpts({ claudeSessionId: "abc-123", resume: false })
     expect(buildLaunchCommand(cfg, opts)).toBe(
-      "happy --session-id abc-123 --dangerously-skip-permissions",
+      "happy --dangerously-skip-permissions",
     )
   })
 
-  test("resume: --resume <uuid> + extra args (no --session-id)", () => {
+  test("bin=happy resume: --resume <uuid> (Happy forwards --resume)", () => {
     const cfg = testConfig()
     const opts = makeOpts({ claudeSessionId: "abc-123", resume: true })
     expect(buildLaunchCommand(cfg, opts)).toBe(
@@ -108,12 +109,40 @@ describe("buildLaunchCommand", () => {
     )
   })
 
-  test("empty extraArgs: just bin + session flag", () => {
+  test("bin=claude first launch: --session-id <uuid> + extra args", () => {
+    const cfg = testConfig({
+      runtime: { driver: "claude", bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
+    })
+    const opts = makeOpts({ claudeSessionId: "uuid-1", resume: false })
+    expect(buildLaunchCommand(cfg, opts)).toBe(
+      "claude --session-id uuid-1 --dangerously-skip-permissions",
+    )
+  })
+
+  test("bin=claude resume: --resume <uuid> + extra args", () => {
+    const cfg = testConfig({
+      runtime: { driver: "claude", bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
+    })
+    const opts = makeOpts({ claudeSessionId: "uuid-1", resume: true })
+    expect(buildLaunchCommand(cfg, opts)).toBe(
+      "claude --resume uuid-1 --dangerously-skip-permissions",
+    )
+  })
+
+  test("empty extraArgs (bin=claude): just bin + session flag", () => {
     const cfg = testConfig({
       runtime: { driver: "claude", bin: "claude", extraArgs: [] },
     })
     const opts = makeOpts({ claudeSessionId: "uuid-1", resume: false })
     expect(buildLaunchCommand(cfg, opts)).toBe("claude --session-id uuid-1")
+  })
+
+  test("empty extraArgs (bin=happy first launch): just bin", () => {
+    const cfg = testConfig({
+      runtime: { driver: "claude", bin: "happy", extraArgs: [] },
+    })
+    const opts = makeOpts({ claudeSessionId: "abc-123", resume: false })
+    expect(buildLaunchCommand(cfg, opts)).toBe("happy")
   })
 })
 
@@ -313,6 +342,12 @@ describe("runClaudeSession — resume ordering", () => {
       })
       const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
       const log = new MemoryLogger()
+      // Use bin=claude so this test stays focused on wakeUpPrompt ordering;
+      // happy first launch triggers /status discovery which is covered in
+      // tests/claude-session-happy-mode.test.ts.
+      const cfg = testConfig({
+        runtime: { driver: "claude", bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
+      })
       const result = await runClaudeSession(
         makeOpts({
           sentinelFile: sentinel,
@@ -320,7 +355,7 @@ describe("runClaudeSession — resume ordering", () => {
           resume: false,
           wakeUpPrompt: "SHOULD NOT BE SENT",
         }),
-        testConfig(),
+        cfg,
         log,
         clock,
         z,

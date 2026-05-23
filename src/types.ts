@@ -27,13 +27,13 @@ export interface InvokeOpts {
 }
 
 export type EpisodeResult =
-  | { status: "completed"; durationMs: number }
-  | { status: "rate_limited"; resumeAt: Date }
-  | { status: "weekly_limited"; resumeAt: Date }      // NEW v2
-  | { status: "context_full"; handoffWritten: boolean }  // NEW v2 (F02)
-  | { status: "timeout" }
-  | { status: "error"; reason: string }
-  | { status: "lost"; reason: string }
+  | { status: "completed"; durationMs: number; discoveredSessionId?: string | null }
+  | { status: "rate_limited"; resumeAt: Date; discoveredSessionId?: string | null }
+  | { status: "weekly_limited"; resumeAt: Date; discoveredSessionId?: string | null }      // NEW v2
+  | { status: "context_full"; handoffWritten: boolean; discoveredSessionId?: string | null }  // NEW v2 (F02)
+  | { status: "timeout"; discoveredSessionId?: string | null }
+  | { status: "error"; reason: string; discoveredSessionId?: string | null }
+  | { status: "lost"; reason: string; discoveredSessionId?: string | null }
 
 export interface Runtime {
   invoke(opts: InvokeOpts): Promise<EpisodeResult>

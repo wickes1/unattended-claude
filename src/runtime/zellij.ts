@@ -234,15 +234,17 @@ export async function listSessions(): Promise<string[]> {
 
 /**
  * send-keys — tmux's send-keys takes both text and key names; zellij splits
- * them: text goes through write-chars, key names through send-keys. The whole
- * codebase only uses "Enter" as a key name, so dispatch on that — behavior is
- * equivalent for every call site.
+ * them: text goes through write-chars, key names through send-keys. Named keys
+ * known to the codebase (Enter, Esc) are forwarded to `zellij action send-keys`;
+ * everything else is treated as literal text via write-chars.
  */
+const NAMED_KEYS = new Set(["Enter", "Esc"])
+
 export async function sendKeys(session: string, tab: string, ...keys: string[]): Promise<void> {
   const { paneId } = entry(session, tab)
   for (const k of keys) {
-    if (k === "Enter") {
-      await zellijCmd(actionArgs(session, ["send-keys", "--pane-id", paneId, "Enter"]))
+    if (NAMED_KEYS.has(k)) {
+      await zellijCmd(actionArgs(session, ["send-keys", "--pane-id", paneId, k]))
     } else {
       await zellijCmd(actionArgs(session, ["write-chars", "--pane-id", paneId, k]))
     }
