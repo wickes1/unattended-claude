@@ -75,7 +75,6 @@ function makeCtx(s: Setup, runtime: MockRuntime, over: Partial<EpisodeCtx> = {})
     windowEndsAt: null,
     windDownLeadMs: 5 * 60_000,
     parentSession: "ucl-test",
-    contextCompactThreshold: 150_000,
     episodeHardTimeoutMs: 60 * 60_000,
     ...over,
   }

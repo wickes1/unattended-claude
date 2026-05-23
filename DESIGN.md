@@ -221,7 +221,7 @@ happy --dangerously-skip-permissions --resume "$TASK_UUID"
 
 ### HANDOFF.md(context-limit 退路,< 5% 情境)
 
-當 claude jsonl 接近 200K(可 config `execution.context_compact_threshold`,預設 150000)時:
+當 claude TUI 觸發 context-limit detector(reactive only — `matchContextLimit` 抓「Conversation too long」訊息;proactive jsonl-size 監測 v2 不做)時:
 
 ```
 worker 注入特殊 prompt:
@@ -239,8 +239,8 @@ worker 注入特殊 prompt:
 ```
 
 **HANDOFF 觸發條件**:
-- jsonl 大小 → token 估算 > threshold
-- 或 claude TUI 顯示「Conversation too long」訊息
+- claude TUI 顯示「Conversation too long」訊息(reactive only)
+- proactive jsonl-size 監測沒做(YAGNI;見 §十六)
 
 絕大多數 task(短期、目標明確)永遠不會撞到。長 task(6+ 小時)會。
 
@@ -252,7 +252,7 @@ worker 注入特殊 prompt:
 |---|---|---|
 | **5-hour rolling** | TUI「Try again at HH:MM」 | 解析 reset → 對比 `--until`:reset ≤ 邊界 → sleep 到 reset 再 `--resume`;reset > 邊界 → 立即 graceful pause,標 `paused-rate-limit-5h`,下個 window resume |
 | **7-day weekly** | TUI weekly limit 訊息(格式待實測) | 解析 reset(可能幾天後)→ 寫 `state/weekly-paused-until.txt` → graceful pause 全部 task → **凍結所有 future scheduled `run`** 直到 reset。`ucl run` preflight 檢查此檔,凍結期內 refuse + 印警告 |
-| **Context (~200K)** | jsonl 大小 > threshold,或 TUI「Conversation too long」| HANDOFF.md 壓縮路徑;`state/tasks/<id>.json` 的 `context_compactions` 累加 |
+| **Context (~200K)** | TUI「Conversation too long」(reactive only) | HANDOFF.md 壓縮路徑;`state/tasks/<id>.json` 的 `context_compactions` 累加 |
 
 ---
 
@@ -394,7 +394,6 @@ runtime:
 
 execution:
   max_parallel_tabs: 3
-  context_compact_threshold: 150000           # tokens
   wind_down_lead_minutes: 5
   smoke_test_workdir: ~/unattended/workdirs/.smoke
 

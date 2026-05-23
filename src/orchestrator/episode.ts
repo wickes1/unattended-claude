@@ -43,8 +43,6 @@ export interface EpisodeCtx {
   windDownLeadMs: number
   /** Parent zellij session for this run. */
   parentSession: string
-  /** Token-equivalent threshold for forcing context-full path. */
-  contextCompactThreshold: number
   /** Hard per-episode timeout in ms (cfg.execution.episodeHardTimeoutMs). */
   episodeHardTimeoutMs: number
   /**
