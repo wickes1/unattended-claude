@@ -70,4 +70,4 @@ Config fallback: `--config <path>` flag → `UNATTENDED_CLAUDE_CONFIG` env → `
 
 ## Status
 
-v2, in active development. v1 lives at `../cc-nightshift/` for reference only.
+v2, in active development. v1 lives at `../legacy/cc-nightshift/` for reference only.
