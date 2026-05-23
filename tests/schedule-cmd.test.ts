@@ -483,22 +483,36 @@ describe("cmdSchedule remove — F11", () => {
 // The plist's ProgramArguments must reflect HOW the CLI was invoked so launchd
 // can re-launch it. Compiled binary → just the binary. Source mode → bun + script.
 
-describe("resolveProgramPrefix — F06", () => {
+describe("resolveProgramPrefix — F06 + install metadata", () => {
+  // All auto-detect tests pin metadataPath to a non-existent file so the
+  // production install.json (which may exist on this machine) doesn't bleed in.
+  const noMeta = (): string => join(mkdtempSync(join(tmpdir(), "ucl-sched-no-meta-")), "install.json")
+
   it("returns [execPath] when execPath basename is 'ucl' (compiled binary mode)", () => {
     expect(
-      resolveProgramPrefix({ execPath: "/usr/local/bin/ucl", argv: ["/usr/local/bin/ucl"] }),
+      resolveProgramPrefix({
+        execPath: "/usr/local/bin/ucl", argv: ["/usr/local/bin/ucl"],
+        metadataPath: noMeta(),
+      }),
     ).toEqual(["/usr/local/bin/ucl"])
   })
 
   it("returns [execPath] when execPath basename is 'unattended-claude' (compiled binary mode)", () => {
     expect(
-      resolveProgramPrefix({ execPath: "/opt/local/bin/unattended-claude", argv: ["/opt/local/bin/unattended-claude"] }),
+      resolveProgramPrefix({
+        execPath: "/opt/local/bin/unattended-claude",
+        argv: ["/opt/local/bin/unattended-claude"],
+        metadataPath: noMeta(),
+      }),
     ).toEqual(["/opt/local/bin/unattended-claude"])
   })
 
   it("is case-insensitive on the binary basename", () => {
     expect(
-      resolveProgramPrefix({ execPath: "/usr/local/bin/UCL", argv: [] }),
+      resolveProgramPrefix({
+        execPath: "/usr/local/bin/UCL", argv: [],
+        metadataPath: noMeta(),
+      }),
     ).toEqual(["/usr/local/bin/UCL"])
   })
 
@@ -507,16 +521,22 @@ describe("resolveProgramPrefix — F06", () => {
       resolveProgramPrefix({
         execPath: "/usr/local/bin/bun",
         argv: ["/usr/local/bin/bun", "/Users/me/proj/src/index.ts", "schedule", "install"],
+        metadataPath: noMeta(),
       }),
     ).toEqual(["/usr/local/bin/bun", "/Users/me/proj/src/index.ts"])
   })
 
-  it("binOverride always wins, regardless of execPath/argv", () => {
+  it("binOverride always wins, regardless of execPath/argv/metadata", () => {
+    // Even with install metadata present, --bin wins.
+    const metaDir = mkdtempSync(join(tmpdir(), "ucl-sched-meta-"))
+    const metaPath = join(metaDir, "install.json")
+    writeFileSync(metaPath, JSON.stringify({ binary_path: "/from/metadata/ucl" }))
     expect(
       resolveProgramPrefix({
         execPath: "/usr/local/bin/bun",
         argv: ["/usr/local/bin/bun", "/Users/me/proj/src/index.ts"],
         binOverride: "/opt/local/bin/ucl",
+        metadataPath: metaPath,
       }),
     ).toEqual(["/opt/local/bin/ucl"])
     // Even in compiled mode, override wins.
@@ -525,14 +545,50 @@ describe("resolveProgramPrefix — F06", () => {
         execPath: "/usr/local/bin/ucl",
         argv: ["/usr/local/bin/ucl"],
         binOverride: "/elsewhere/ucl",
+        metadataPath: noMeta(),
       }),
     ).toEqual(["/elsewhere/ucl"])
   })
 
-  it("throws a clear error when in source mode but argv[1] is missing", () => {
+  it("throws a clear error when in source mode but argv[1] is missing and no metadata", () => {
     expect(() =>
-      resolveProgramPrefix({ execPath: "/usr/local/bin/bun", argv: ["/usr/local/bin/bun"] }),
+      resolveProgramPrefix({
+        execPath: "/usr/local/bin/bun", argv: ["/usr/local/bin/bun"],
+        metadataPath: noMeta(),
+      }),
     ).toThrow(/cannot determine script path|argv\[1\] is missing/)
+  })
+
+  it("uses binary_path from install metadata when present (beats auto-detect)", () => {
+    // Even when execPath is bun (which would normally take the source-mode path),
+    // install metadata's binary_path is preferred — that's the whole point: the
+    // plist should point at the stable installed binary, not the dev cwd.
+    const metaDir = mkdtempSync(join(tmpdir(), "ucl-sched-meta-prio-"))
+    const metaPath = join(metaDir, "install.json")
+    writeFileSync(metaPath, JSON.stringify({
+      binary_path: "/Users/test/.local/bin/ucl",
+      skills_dir: "/Users/test/repo/.claude/skills",
+    }))
+    expect(
+      resolveProgramPrefix({
+        execPath: "/usr/local/bin/bun",
+        argv: ["/usr/local/bin/bun", "/Users/test/repo/src/index.ts"],
+        metadataPath: metaPath,
+      }),
+    ).toEqual(["/Users/test/.local/bin/ucl"])
+  })
+
+  it("falls back to auto-detect when metadata file is missing binary_path", () => {
+    const metaDir = mkdtempSync(join(tmpdir(), "ucl-sched-meta-partial-"))
+    const metaPath = join(metaDir, "install.json")
+    writeFileSync(metaPath, JSON.stringify({ skills_dir: "/x/.claude/skills" }))
+    // No binary_path → auto-detect kicks in; compiled mode matches "ucl".
+    expect(
+      resolveProgramPrefix({
+        execPath: "/usr/local/bin/ucl", argv: ["/usr/local/bin/ucl"],
+        metadataPath: metaPath,
+      }),
+    ).toEqual(["/usr/local/bin/ucl"])
   })
 })
 

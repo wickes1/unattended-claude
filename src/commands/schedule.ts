@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import { parseDocument, type Document } from "yaml"
 import { ensureDir } from "../fs-utils.ts"
 import type { Config, ScheduleWindow } from "../config.ts"
+import { readInstallMetadata, INSTALL_METADATA_PATH } from "../git-utils.ts"
 import { parseHHMM } from "../schedule.ts"
 
 export const helpText = `Usage: ucl schedule <list|add|remove|install|uninstall> [--bin <path>]
@@ -31,23 +32,40 @@ const COMPILED_BIN_NAMES = new Set(["ucl", "unattended-claude"])
 
 /**
  * Resolve the ProgramArguments *prefix* (everything before `run --until <end>`)
- * for the launchd plist, by inspecting how the current process was invoked.
+ * for the launchd plist.
  *
- * - `binOverride` (e.g. from `--bin /opt/local/bin/ucl`) always wins: emits `[binOverride]`.
- * - Compiled binary mode (`execPath` basename matches "ucl" or "unattended-claude"):
- *   emits `[execPath]`.
- * - Source mode (Bun interpreter + script path in argv[1]):
- *   emits `[execPath, scriptPath]`.
+ * Resolution priority:
+ *   1. `binOverride` (e.g. from `--bin /opt/local/bin/ucl`) — always wins.
+ *   2. Install metadata at ~/.local/share/unattended-claude/install.json —
+ *      `binary_path` is the symlink that scripts/install.ts placed on $PATH.
+ *      This is the production path: stable across cwd changes / homebrew
+ *      cellar moves / bunx invocations.
+ *   3. Auto-detect from `execPath` basename matching "ucl"/"unattended-claude"
+ *      (compiled binary) → emits `[execPath]`.
+ *   4. Source mode (Bun interpreter + script path in argv[1]) →
+ *      emits `[execPath, scriptPath]`. Dev fallback.
  *
- * If we can't detect compiled mode and `argv[1]` is missing, throw — silently
- * writing a plist that launchd will fail to execute is worse than a clear error.
+ * Throws if all four fail (e.g. source mode but argv[1] missing) — silently
+ * writing a plist launchd can't execute is worse than a clear error.
  */
 export function resolveProgramPrefix(opts: {
   execPath?: string
   argv?: string[]
   binOverride?: string
+  /**
+   * Path to install metadata. Tests override this; production defaults to
+   * INSTALL_METADATA_PATH. Pass an explicit non-existent path to force the
+   * auto-detect fallback.
+   */
+  metadataPath?: string
 } = {}): string[] {
   if (opts.binOverride) return [opts.binOverride]
+
+  // Strategy 2: install metadata.
+  const meta = readInstallMetadata(opts.metadataPath ?? INSTALL_METADATA_PATH)
+  if (meta?.binary_path) return [meta.binary_path]
+
+  // Strategy 3 + 4: detect from process state.
   const execPath = opts.execPath ?? process.execPath
   const argv = opts.argv ?? process.argv
   const exeBase = basename(execPath).toLowerCase()
@@ -59,7 +77,7 @@ export function resolveProgramPrefix(opts: {
       `schedule install: cannot determine script path. ` +
       `execPath=${execPath} is not a recognized compiled binary (expected one of: ` +
       `${[...COMPILED_BIN_NAMES].join(", ")}) and argv[1] is missing. ` +
-      `Pass --bin <path> to override.`,
+      `Pass --bin <path> to override, or run \`bun scripts/install.ts\`.`,
     )
   }
   return [execPath, script]
