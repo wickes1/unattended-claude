@@ -6,10 +6,11 @@ import {
   parseRunArgs,
   deriveWindowEnd,
   loadTaskDocs,
-  buildPromptFile,
-  buildWakeUpPrompt,
+  makeBuildPromptFile,
+  makeBuildWakeUpPrompt,
 } from "../src/commands/run.ts"
 import { Layout } from "../src/layout.ts"
+import { PromptBuilder } from "../src/orchestrator/prompt-builder.ts"
 import type { TaskDoc } from "../src/types.ts"
 import { testConfig } from "./helpers.ts"
 
@@ -153,7 +154,7 @@ Body text here.
   })
 })
 
-describe("buildPromptFile", () => {
+describe("makeBuildPromptFile (PromptBuilder binding)", () => {
   function fakeDoc(layout: Layout): TaskDoc {
     const id = "2026-05-23-01-x"
     mkdirSync(layout.tasksDir, { recursive: true })
@@ -168,32 +169,42 @@ describe("buildPromptFile", () => {
     }
   }
 
+  function build(): {
+    fn: (t: TaskDoc, e: number, r: boolean) => string
+    promptsDir: string
+  } {
+    const promptsDir = mkdtempSync(join(tmpdir(), "ucl-prompt-"))
+    const pb = new PromptBuilder({ promptsDir })
+    return { fn: makeBuildPromptFile(pb, promptsDir), promptsDir }
+  }
+
   it("writes task content for fresh episode (resume=false)", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
-    const path = buildPromptFile(task, 1, false, layout)
-    const content = readFileSync(path, "utf8")
-    expect(content).toBe("# Task body content here\n")
+    const { fn } = build()
+    const path = fn(task, 1, false)
+    expect(readFileSync(path, "utf8")).toBe("# Task body content here\n")
   })
 
   it("writes wake-up continuation cue for resume=true", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
-    const path = buildPromptFile(task, 2, true, layout)
-    const content = readFileSync(path, "utf8")
-    expect(content).toContain("Continue from where you left off")
+    const { fn } = build()
+    const path = fn(task, 2, true)
+    expect(readFileSync(path, "utf8")).toContain("Continue from where you left off")
   })
 
   it("path filename includes task id + episode", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
-    const path = buildPromptFile(task, 3, false, layout)
+    const { fn } = build()
+    const path = fn(task, 3, false)
     expect(path).toContain(task.id)
     expect(path).toContain("ep3")
   })
 })
 
-describe("buildWakeUpPrompt", () => {
+describe("makeBuildWakeUpPrompt (PromptBuilder binding)", () => {
   const task: TaskDoc = {
     id: "x",
     title: "x",
@@ -202,39 +213,20 @@ describe("buildWakeUpPrompt", () => {
     file: "/tmp/x.md",
   }
 
+  function build(): (t: TaskDoc, r: import("../src/types.ts").PausedReason | null) => string | null {
+    const promptsDir = mkdtempSync(join(tmpdir(), "ucl-prompt-"))
+    return makeBuildWakeUpPrompt(new PromptBuilder({ promptsDir }))
+  }
+
   it("returns null when pausedReason is null", () => {
-    expect(buildWakeUpPrompt(task, null)).toBeNull()
-  })
-
-  it("schedule-boundary returns continuation cue", () => {
-    expect(buildWakeUpPrompt(task, "schedule-boundary")).toContain("Schedule window ended")
-  })
-
-  it("rate-limit-5h mentions 5-hour reset", () => {
-    expect(buildWakeUpPrompt(task, "rate-limit-5h")).toContain("5-hour")
-  })
-
-  it("weekly-limit mentions weekly cleared", () => {
-    expect(buildWakeUpPrompt(task, "weekly-limit")).toContain("weekly limit")
+    expect(build()(task, null)).toBeNull()
   })
 
   it("context-full returns null (handled separately by orchestrator)", () => {
-    expect(buildWakeUpPrompt(task, "context-full")).toBeNull()
+    expect(build()(task, "context-full")).toBeNull()
   })
 
-  it("user-stop returns continuation cue", () => {
-    expect(buildWakeUpPrompt(task, "user-stop")).toContain("Manual stop")
-  })
-
-  it("user-stop-now warns about possible duplication", () => {
-    const out = buildWakeUpPrompt(task, "user-stop-now")
-    expect(out).toContain("interrupted forcibly")
-    expect(out).toContain("verify")
-  })
-
-  it("orphan asks to verify file/test state", () => {
-    const out = buildWakeUpPrompt(task, "orphan")
-    expect(out).toContain("interrupted unexpectedly")
-    expect(out).toContain("verify")
+  it("schedule-boundary returns continuation cue", () => {
+    expect(build()(task, "schedule-boundary")).toContain("Schedule window ended")
   })
 })

@@ -8,6 +8,7 @@ import { RealClock } from "../clock.ts"
 import { WeeklyLimitGate } from "../orchestrator/rate-limit.ts"
 import { isProcessAlive } from "../orchestrator/lifecycle.ts"
 import { runOrchestrator, type RunResult } from "../orchestrator/main.ts"
+import { PromptBuilder } from "../orchestrator/prompt-builder.ts"
 import { activeWindow, windowEndsAt, parseHHMM } from "../schedule.ts"
 import { InteractiveZellijRuntime } from "../runtime/claude-session.ts"
 import type { TaskDoc, PausedReason } from "../types.ts"
@@ -94,44 +95,33 @@ function parseFrontmatter(content: string): Record<string, unknown> {
   return result
 }
 
-/** Build a prompt file for episode N. For resume, returns a file with the wake-up text. */
-export function buildPromptFile(
-  task: TaskDoc,
-  episode: number,
-  resume: boolean,
-  layout: Layout,
-): string {
-  const dir = mkdtempSync(join(tmpdir(), `ucl-prompt-`))
-  const path = join(dir, `${task.id}-ep${episode}.md`)
-  if (resume) {
-    // Resume prompt: short continuation cue (orchestrator passes the wake-up via wakeUpPrompt too).
+/**
+ * Bind a PromptBuilder to the orchestrator's `(task, episode, resume) → path`
+ * callback shape. For resume=true we still write a tiny "continue" cue file
+ * here — F02 will replace this branch with `pb.resumeWithHandoff(...)`.
+ */
+export function makeBuildPromptFile(
+  pb: PromptBuilder,
+  promptsDir: string,
+): (task: TaskDoc, episode: number, resume: boolean) => string {
+  return (task, episode, resume) => {
+    if (!resume) return pb.initial(task, episode).path!
+    const path = join(promptsDir, `${task.id}-ep${episode}.md`)
     writeFileSync(path, `Continue from where you left off in the previous episode.\n`)
-  } else {
-    // First episode: paste the task doc contents.
-    writeFileSync(path, readFileSync(task.file, "utf8"))
+    return path
   }
-  return path
 }
 
-/** Build a wake-up prompt by paused reason. Returns null if not resuming. */
-export function buildWakeUpPrompt(task: TaskDoc, pausedReason: PausedReason | null): string | null {
-  if (!pausedReason) return null
-  switch (pausedReason) {
-    case "schedule-boundary":
-      return "Schedule window ended. Time to continue — pick up from where you stopped."
-    case "rate-limit-5h":
-      return "The 5-hour rate limit window has reset. Continue from where you stopped."
-    case "weekly-limit":
-      return "The weekly limit has cleared. Continue from where you stopped."
-    case "context-full":
-      // Context-full triggers HANDOFF, the new session is fresh, no wake-up — handled separately by orchestrator.
-      return null
-    case "user-stop":
-      return "Manual stop ended. Continue from where you stopped."
-    case "user-stop-now":
-      return "Previously interrupted forcibly. Continue, but please first verify current file/test state to avoid duplication."
-    case "orphan":
-      return "Previous session was interrupted unexpectedly (machine reboot or process death). Continue, but please first verify current file/test state."
+/**
+ * Bind a PromptBuilder to the orchestrator's
+ * `(task, pausedReason | null) → string | null` wake-up callback shape.
+ */
+export function makeBuildWakeUpPrompt(
+  pb: PromptBuilder,
+): (task: TaskDoc, pausedReason: PausedReason | null) => string | null {
+  return (task, pausedReason) => {
+    if (!pausedReason) return null
+    return pb.wakeUp(task, pausedReason)?.text ?? null
   }
 }
 
@@ -163,6 +153,8 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
   log.log("info", `run starting; window ends ${windowEnd ? windowEnd.toISOString() : "(unbounded)"}`)
 
   const runtime = new InteractiveZellijRuntime(cfg, log, clock)
+  const promptsDir = mkdtempSync(join(tmpdir(), "ucl-prompt-"))
+  const pb = new PromptBuilder({ promptsDir })
   return runOrchestrator(
     {
       cfg,
@@ -171,8 +163,8 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
       clock,
       runtime,
       loadTaskDocs: () => loadTaskDocs(layout),
-      buildPromptFile: (t, e, r) => buildPromptFile(t, e, r, layout),
-      buildWakeUpPrompt,
+      buildPromptFile: makeBuildPromptFile(pb, promptsDir),
+      buildWakeUpPrompt: makeBuildWakeUpPrompt(pb),
     },
     {
       windowEndsAt: windowEnd,
