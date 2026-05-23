@@ -8,9 +8,15 @@
  * Together they're "what happens for one episode". DESIGN §五 / §八.
  */
 import { randomUUID } from "node:crypto"
+import { homedir } from "node:os"
 import { ensureDir } from "../fs-utils.ts"
 import { appendEvent } from "../events.ts"
 import type { Layout } from "../layout.ts"
+import {
+  defaultClaudeProjectsDir,
+  findClaudeSessionFile,
+  sumTokensFromJsonl,
+} from "../usage.ts"
 import { RateLimitGate, WeeklyLimitGate } from "./rate-limit.ts"
 import { TaskStateStore } from "./state-store.ts"
 import type {
@@ -41,6 +47,12 @@ export interface EpisodeCtx {
   contextCompactThreshold: number
   /** Hard per-episode timeout in ms (cfg.execution.episodeHardTimeoutMs). */
   episodeHardTimeoutMs: number
+  /**
+   * Where claude stores per-session jsonl transcripts. Used by applyResult to
+   * read input/output token counts and emit usage_snapshot. Tests inject a
+   * tmpdir here; production defaults to ~/.claude/projects via defaultClaudeProjectsDir.
+   */
+  claudeProjectsDir?: string
 }
 
 /** Build InvokeOpts for the next episode of a task. */
@@ -118,9 +130,17 @@ export async function applyResult(
   result: EpisodeResult,
   ctx: EpisodeCtx,
 ): Promise<void> {
+  let epNumForSideEvents = 0
+  let sessionIdForSnapshot: string | null = null
   await ctx.store.update(task.id, (s) => {
     s.current_episode += 1
     const epNum = s.current_episode
+    epNumForSideEvents = epNum
+    // Capture the session id BEFORE any branch (context_full) regenerates it,
+    // so the usage_snapshot points at the jsonl this episode actually wrote to.
+    // For F01 discoveredSessionId we prefer the discovered id (it's what claude
+    // actually used) over the pre-generated UUID.
+    sessionIdForSnapshot = result.discoveredSessionId || s.claude_session_id
     const ts = ctx.clock.now().toISOString()
     // Episode launched; the handoff (if any) has been consumed. The
     // context_full branch below may re-set handoff_pending=true with a
@@ -222,4 +242,50 @@ export async function applyResult(
         return
     }
   })
+
+  // ── Side-channel events (F05) ────────────────────────────────────────
+  // These are emitted after the state mutation because they don't drive any
+  // state transition — they're observability. wind_down_injected: only when
+  // pollUntilDone actually crossed the boundary this episode. usage_snapshot:
+  // best-effort, always attempted at episode end so events.jsonl can serve as
+  // the source of truth for `ucl stats`. Missing claude_session_id (Happy
+  // first-launch discovery failure) is the one skip — without a UUID we
+  // can't locate the jsonl.
+  const sideTs = ctx.clock.now().toISOString()
+
+  if (result.windDownInjected) {
+    appendEvent(ctx.layout, {
+      ts: sideTs,
+      event: "wind_down_injected",
+      task: task.id,
+      episode: epNumForSideEvents,
+      at_minutes_before_boundary: result.windDownInjected.atMinutesBeforeBoundary,
+    })
+  }
+
+  if (sessionIdForSnapshot) {
+    const projectsDir = ctx.claudeProjectsDir ?? defaultClaudeProjectsDir(homedir())
+    const sourcePath = findClaudeSessionFile(projectsDir, sessionIdForSnapshot)
+    if (sourcePath) {
+      const tokens = sumTokensFromJsonl(sourcePath)
+      appendEvent(ctx.layout, {
+        ts: sideTs,
+        event: "usage_snapshot",
+        task: task.id,
+        episode: epNumForSideEvents,
+        tokens_used: tokens,
+        source_path: sourcePath,
+      })
+    } else {
+      ctx.log.log(
+        "warn",
+        `usage_snapshot skipped: no jsonl found for session ${sessionIdForSnapshot}`,
+      )
+    }
+  } else {
+    ctx.log.log(
+      "warn",
+      `usage_snapshot skipped for ${task.id} ep${epNumForSideEvents}: claude_session_id is empty`,
+    )
+  }
 }

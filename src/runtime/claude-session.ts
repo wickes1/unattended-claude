@@ -10,7 +10,7 @@
  * zellij server.
  */
 import type { Config } from "../config.ts"
-import type { Clock, EpisodeResult, InvokeOpts, Logger, Runtime } from "../types.ts"
+import type { Clock, EpisodeResult, InvokeOpts, Logger, Runtime, WindDownInfo } from "../types.ts"
 import {
   hasInputPrompt,
   matchContextLimit,
@@ -227,15 +227,21 @@ export async function pollUntilDone(
   let stableSince: number | null = null
   let strayReplies = 0
   let tick = 0
-  let windDownInjected = false
+  let windDownInfo: WindDownInfo | null = null
 
   for (;;) {
     // 1. hard timeout
-    if (clock.now().getTime() - start >= opts.timeoutMs) return { status: "timeout" }
+    if (clock.now().getTime() - start >= opts.timeoutMs) {
+      return { status: "timeout", windDownInjected: windDownInfo }
+    }
 
     // 2. parent session died
     if (!(await z.sessionAlive(opts.parentSession))) {
-      return { status: "lost", reason: "zellij session died" }
+      return {
+        status: "lost",
+        reason: "zellij session died",
+        windDownInjected: windDownInfo,
+      }
     }
 
     const text = await z.capture(opts.parentSession, opts.tabName, cfg.execution.captureLines)
@@ -245,12 +251,12 @@ export async function pollUntilDone(
       const weekly = matchWeeklyLimit(text, clock.now())
       if (weekly) {
         log.log("warn", `weekly limit detected, resume at ${weekly.toISOString()}`)
-        return { status: "weekly_limited", resumeAt: weekly }
+        return { status: "weekly_limited", resumeAt: weekly, windDownInjected: windDownInfo }
       }
       const rate = matchRateLimit(text, clock.now(), cfg.rateLimit.parseFailFallbackMs)
       if (rate) {
         log.log("warn", `rate limit detected, resume at ${rate.toISOString()}`)
-        return { status: "rate_limited", resumeAt: rate }
+        return { status: "rate_limited", resumeAt: rate, windDownInjected: windDownInfo }
       }
     }
 
@@ -258,23 +264,33 @@ export async function pollUntilDone(
     if (matchContextLimit(text)) {
       log.log("warn", "context-full detected; injecting HANDOFF-writing prompt")
       const handoffWritten = await writeHandoffOnContextFull(opts, log, clock, z)
-      return { status: "context_full", handoffWritten }
+      return { status: "context_full", handoffWritten, windDownInjected: windDownInfo }
     }
 
-    // 5. wind-down injection — exactly once, when the window is about to end
+    // 5. wind-down injection — exactly once, when the window is about to end.
+    // Capture (windDownAt - clock.now()) at the moment we cross the boundary so
+    // applyResult can emit a wind_down_injected event with the lag in minutes.
     if (
-      !windDownInjected &&
+      windDownInfo === null &&
       opts.windDownAt !== null &&
       clock.now().getTime() >= opts.windDownAt.getTime()
     ) {
       log.log("info", "wind-down boundary reached; injecting wind-down prompt")
       await z.sendText(opts.parentSession, opts.tabName, WIND_DOWN_PROMPT)
-      windDownInjected = true
+      windDownInfo = {
+        atMinutesBeforeBoundary: Math.round(
+          (opts.windDownAt.getTime() - clock.now().getTime()) / 60_000,
+        ),
+      }
     }
 
     // 6. sentinel file (primary signal)
     if (await Bun.file(opts.sentinelFile).exists()) {
-      return { status: "completed", durationMs: clock.now().getTime() - start }
+      return {
+        status: "completed",
+        durationMs: clock.now().getTime() - start,
+        windDownInjected: windDownInfo,
+      }
     }
 
     // 7. inactivity (secondary signal)
@@ -290,6 +306,7 @@ export async function pollUntilDone(
               return {
                 status: "lost",
                 reason: "still stuck after injecting stray-question replies",
+                windDownInjected: windDownInfo,
               }
             }
             strayReplies++
@@ -301,7 +318,11 @@ export async function pollUntilDone(
             lastText = null
             stableSince = null
           } else {
-            return { status: "completed", durationMs: clock.now().getTime() - start }
+            return {
+              status: "completed",
+              durationMs: clock.now().getTime() - start,
+              windDownInjected: windDownInfo,
+            }
           }
         }
         // Idle but not at an input prompt → keep waiting until hard timeout.

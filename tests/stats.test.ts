@@ -306,8 +306,191 @@ describe("renderStats", () => {
       totalTokens: 1234567,
       totalTasksDone: 1,
       totalTasksFailed: 0,
+      fellBackToJsonlScan: false,
     }
     const out = renderStats(summary)
     expect(out).toContain("1,234,567")
+  })
+})
+
+// ── F05: events.jsonl is now the source of truth for tokens ──────────
+//
+// buildStats used to scan ~/.claude/projects/*.jsonl unconditionally. F05
+// rebases it on usage_snapshot events so the count reflects what the
+// orchestrator actually observed at episode-end (and so future deletions
+// of the claude jsonl files don't erase history). These tests pin:
+//   1. usage_snapshot events drive per-day token sums when present.
+//   2. multiple snapshots for the same task across days bucket correctly
+//      (the old per-task last_updated heuristic could only hit one day).
+//   3. when no usage_snapshot events exist, fall back to the jsonl scan
+//      AND signal fellBackToJsonlScan=true so the CLI prints a notice.
+//   4. usage_snapshot OUTSIDE the days window is excluded.
+describe("buildStats: usage_snapshot events (F05)", () => {
+  it("sums tokens_used from usage_snapshot events bucketed by event ts", () => {
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date("2026-05-23T12:00:00Z")
+    const today = fmtDate(now)
+    const yesterday = fmtDate(new Date(now.getTime() - 86_400_000))
+
+    const evs: Event[] = [
+      {
+        ts: new Date(now.getTime() - 86_400_000).toISOString(),
+        event: "usage_snapshot",
+        task: "t1",
+        episode: 1,
+        tokens_used: 500,
+        source_path: "/x/t1.jsonl",
+      },
+      {
+        ts: now.toISOString(),
+        event: "usage_snapshot",
+        task: "t1",
+        episode: 2,
+        tokens_used: 800,
+        source_path: "/x/t1.jsonl",
+      },
+      {
+        ts: now.toISOString(),
+        event: "usage_snapshot",
+        task: "t2",
+        episode: 1,
+        tokens_used: 200,
+        source_path: "/x/t2.jsonl",
+      },
+    ]
+    for (const e of evs) appendEvent(layout, e)
+
+    const s = buildStats(layout, projects, 7, now)
+    const todayBucket = s.perDay.find((d) => d.day === today)!
+    const yesterdayBucket = s.perDay.find((d) => d.day === yesterday)!
+    expect(yesterdayBucket.tokens).toBe(500)
+    expect(todayBucket.tokens).toBe(1000)
+    expect(s.totalTokens).toBe(1500)
+    expect(s.fellBackToJsonlScan).toBe(false)
+  })
+
+  it("a single task's snapshots split across days populate both day buckets", () => {
+    // The pre-F05 fallback assigned ALL of a task's tokens to last_updated's
+    // single day. usage_snapshot events let one task span multiple days when
+    // it spans multiple episodes — this test would fail under the old behavior.
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date("2026-05-23T12:00:00Z")
+    const today = fmtDate(now)
+    const yesterday = fmtDate(new Date(now.getTime() - 86_400_000))
+
+    appendEvent(layout, {
+      ts: new Date(now.getTime() - 86_400_000).toISOString(),
+      event: "usage_snapshot",
+      task: "long-task",
+      episode: 1,
+      tokens_used: 700,
+      source_path: "/x.jsonl",
+    })
+    appendEvent(layout, {
+      ts: now.toISOString(),
+      event: "usage_snapshot",
+      task: "long-task",
+      episode: 2,
+      tokens_used: 300,
+      source_path: "/x.jsonl",
+    })
+
+    const s = buildStats(layout, projects, 7, now)
+    const todayBucket = s.perDay.find((d) => d.day === today)!
+    const yesterdayBucket = s.perDay.find((d) => d.day === yesterday)!
+    expect(yesterdayBucket.tokens).toBe(700)
+    expect(todayBucket.tokens).toBe(300)
+  })
+
+  it("usage_snapshot outside the days window is excluded", () => {
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date("2026-05-23T12:00:00Z")
+    const longAgo = new Date(now.getTime() - 30 * 86_400_000)
+
+    appendEvent(layout, {
+      ts: longAgo.toISOString(),
+      event: "usage_snapshot",
+      task: "old",
+      episode: 1,
+      tokens_used: 9_999,
+      source_path: "/old.jsonl",
+    })
+    appendEvent(layout, {
+      ts: now.toISOString(),
+      event: "usage_snapshot",
+      task: "new",
+      episode: 1,
+      tokens_used: 100,
+      source_path: "/new.jsonl",
+    })
+
+    const s = buildStats(layout, projects, 7, now)
+    expect(s.totalTokens).toBe(100)
+  })
+
+  it("falls back to jsonl scan + flags fellBackToJsonlScan when no usage_snapshot events exist", async () => {
+    // No usage_snapshot events at all → must use the legacy claude-projects-dir
+    // scan AND set fellBackToJsonlScan so the CLI can print a notice. Without
+    // that flag, operators staring at an empty token column wouldn't know
+    // their events.jsonl is missing the new event type.
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date()
+
+    const sub = join(projects, "-Users-foo")
+    mkdirSync(sub, { recursive: true })
+    const sessionUuid = "session-legacy"
+    writeFileSync(
+      join(sub, `${sessionUuid}.jsonl`),
+      JSON.stringify({ message: { usage: { input_tokens: 100, output_tokens: 50 } } }) + "\n",
+    )
+
+    const store = new TaskStateStore(layout)
+    store.init("2026-05-23-01-legacy", "/tmp/wd", sessionUuid)
+    await store.update("2026-05-23-01-legacy", (st) => {
+      st.state = "done"
+    })
+
+    const s = buildStats(layout, projects, 7, now)
+    expect(s.fellBackToJsonlScan).toBe(true)
+    expect(s.totalTokens).toBe(150)
+  })
+
+  it("does NOT fall back when at least one usage_snapshot event exists", async () => {
+    // Mixed-mode safety: even if a stale claude jsonl is sitting on disk,
+    // once we have ANY usage_snapshot we must not double-count via the
+    // fallback. The legacy scan path would otherwise add 9999 silently.
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date("2026-05-23T12:00:00Z")
+
+    const sub = join(projects, "-Users-stale")
+    mkdirSync(sub, { recursive: true })
+    const staleUuid = "stale-session"
+    writeFileSync(
+      join(sub, `${staleUuid}.jsonl`),
+      JSON.stringify({ message: { usage: { input_tokens: 9_999, output_tokens: 0 } } }) + "\n",
+    )
+    const store = new TaskStateStore(layout)
+    store.init("2026-05-23-01-stale", "/tmp/wd", staleUuid)
+    await store.update("2026-05-23-01-stale", (st) => {
+      st.state = "done"
+    })
+
+    appendEvent(layout, {
+      ts: now.toISOString(),
+      event: "usage_snapshot",
+      task: "2026-05-23-01-stale",
+      episode: 1,
+      tokens_used: 42,
+      source_path: "/x.jsonl",
+    })
+
+    const s = buildStats(layout, projects, 7, now)
+    expect(s.fellBackToJsonlScan).toBe(false)
+    expect(s.totalTokens).toBe(42)
   })
 })

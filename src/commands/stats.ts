@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Config } from "../config.ts"
 import { Layout, fmtDate } from "../layout.ts"
 import { TaskStateStore } from "../orchestrator/state-store.ts"
 import { readEvents } from "../events.ts"
+import { findClaudeSessionFile, sumTokensFromJsonl } from "../usage.ts"
 
 export const helpText = `Usage: ucl stats [--days N] [--claude-projects-dir <path>]
 
@@ -50,40 +50,30 @@ export interface StatsSummary {
   totalTokens: number
   totalTasksDone: number
   totalTasksFailed: number
+  /**
+   * True when events.jsonl had zero `usage_snapshot` entries and tokens were
+   * back-filled from raw claude jsonl (the pre-F05 path). Surfaced so the CLI
+   * can print a one-line notice — events.jsonl is supposed to be the source
+   * of truth, so a fallback usually means very old runs or a brand-new install.
+   */
+  fellBackToJsonlScan: boolean
 }
+
+// findClaudeSessionFile + sumTokensFromJsonl moved to src/usage.ts so the
+// orchestrator can reuse them when emitting usage_snapshot events at episode
+// end. Re-exported here for backward compatibility with existing call sites.
+export { findClaudeSessionFile, sumTokensFromJsonl } from "../usage.ts"
 
 /**
- * Find a claude session jsonl file by UUID across all encoded-cwd project subdirs.
- * Returns the absolute path or null.
+ * Build the StatsSummary from layout + claude jsonl source.
+ *
+ * F05: token rollup prefers `usage_snapshot` events in events.jsonl. Events
+ * are bucketed by their own `ts` (the moment the episode ended), which is
+ * more accurate than the per-task last_updated heuristic and lets a single
+ * task contribute to multiple days when it spans episodes. The legacy
+ * jsonl-scan path is kept as a backfill for runs that predate F05 and
+ * triggered via `fellBackToJsonlScan` so the CLI can print a notice.
  */
-export function findClaudeSessionFile(claudeProjectsDir: string, sessionId: string): string | null {
-  if (!existsSync(claudeProjectsDir)) return null
-  for (const sub of readdirSync(claudeProjectsDir)) {
-    const candidate = join(claudeProjectsDir, sub, `${sessionId}.jsonl`)
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
-
-/** Sum input+output tokens from a claude jsonl. Returns 0 on missing file. */
-export function sumTokensFromJsonl(path: string): number {
-  if (!existsSync(path)) return 0
-  let total = 0
-  const raw = readFileSync(path, "utf8")
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue
-    try {
-      const obj = JSON.parse(line) as { message?: { usage?: { input_tokens?: number; output_tokens?: number } } }
-      const usage = obj?.message?.usage
-      if (usage) {
-        total += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
-      }
-    } catch { /* skip corrupted line */ }
-  }
-  return total
-}
-
-/** Build the StatsSummary from layout + claude jsonl source. */
 export function buildStats(
   layout: Layout,
   claudeProjectsDir: string,
@@ -110,7 +100,7 @@ export function buildStats(
     dayByDate.set(key, stats)
   }
 
-  // Bucket events
+  // Bucket task_done / task_failed / rate_limit events
   for (const e of eventsInWindow) {
     const key = fmtDate(new Date(e.ts))
     const bucket = dayByDate.get(key)
@@ -120,13 +110,30 @@ export function buildStats(
     else if (e.event === "rate_limit") bucket.rateLimitHits++
   }
 
-  // Sum tokens per task → assign to day of last_updated
-  for (const t of tasks) {
-    const key = fmtDate(new Date(t.last_updated))
-    const bucket = dayByDate.get(key)
-    if (!bucket) continue
-    const f = findClaudeSessionFile(claudeProjectsDir, t.claude_session_id)
-    if (f) bucket.tokens += sumTokensFromJsonl(f)
+  // Token rollup. Prefer usage_snapshot events when present — that's the
+  // authoritative per-episode record. Fall back to scanning claude jsonl files
+  // only when no snapshots exist in the window (older runs or fresh installs).
+  const usageSnapshots = eventsInWindow.filter((e) => e.event === "usage_snapshot")
+  let fellBackToJsonlScan = false
+  if (usageSnapshots.length > 0) {
+    for (const e of usageSnapshots) {
+      // Type narrowed: usage_snapshot has tokens_used.
+      const ev = e as Extract<typeof e, { event: "usage_snapshot" }>
+      const key = fmtDate(new Date(ev.ts))
+      const bucket = dayByDate.get(key)
+      if (!bucket) continue
+      bucket.tokens += ev.tokens_used
+    }
+  } else {
+    // Legacy fallback: per-task jsonl scan keyed by last_updated.
+    fellBackToJsonlScan = true
+    for (const t of tasks) {
+      const key = fmtDate(new Date(t.last_updated))
+      const bucket = dayByDate.get(key)
+      if (!bucket) continue
+      const f = findClaudeSessionFile(claudeProjectsDir, t.claude_session_id)
+      if (f) bucket.tokens += sumTokensFromJsonl(f)
+    }
   }
 
   let totalTokens = 0, totalTasksDone = 0, totalTasksFailed = 0
@@ -135,7 +142,7 @@ export function buildStats(
     totalTasksDone += d.tasksDone
     totalTasksFailed += d.tasksFailed
   }
-  return { perDay, totalTokens, totalTasksDone, totalTasksFailed }
+  return { perDay, totalTokens, totalTasksDone, totalTasksFailed, fellBackToJsonlScan }
 }
 
 /** Render as a text table per DESIGN §十二 example. */
@@ -158,5 +165,8 @@ export async function cmdStats(cfg: Config, argv: string[], log: (s: string) => 
   const args = parseStatsArgs(argv)
   const layout = new Layout(cfg.runtimeDir)
   const summary = buildStats(layout, args.claudeProjectsDir, args.days, new Date())
+  if (summary.fellBackToJsonlScan) {
+    log("(no usage_snapshot events found, falling back to jsonl scan)")
+  }
   log(renderStats(summary))
 }
