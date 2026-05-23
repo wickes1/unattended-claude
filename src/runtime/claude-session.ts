@@ -219,7 +219,10 @@ export async function pollUntilDone(
   clock: Clock,
   z: ZellijOps = realZellijOps,
 ): Promise<EpisodeResult> {
-  const start = Date.now()
+  // F03: all flow-control timing routes through the injected Clock so SimClock
+  // tests can validate inactivity / hard-timeout / wind-down deterministically
+  // without real wall-clock waits.
+  const start = clock.now().getTime()
   let lastText: string | null = null
   let stableSince: number | null = null
   let strayReplies = 0
@@ -228,7 +231,7 @@ export async function pollUntilDone(
 
   for (;;) {
     // 1. hard timeout
-    if (Date.now() - start >= opts.timeoutMs) return { status: "timeout" }
+    if (clock.now().getTime() - start >= opts.timeoutMs) return { status: "timeout" }
 
     // 2. parent session died
     if (!(await z.sessionAlive(opts.parentSession))) {
@@ -271,12 +274,15 @@ export async function pollUntilDone(
 
     // 6. sentinel file (primary signal)
     if (await Bun.file(opts.sentinelFile).exists()) {
-      return { status: "completed", durationMs: Date.now() - start }
+      return { status: "completed", durationMs: clock.now().getTime() - start }
     }
 
     // 7. inactivity (secondary signal)
     if (lastText !== null && text === lastText) {
-      if (stableSince !== null && Date.now() - stableSince >= cfg.execution.inactivityTimeoutMs) {
+      if (
+        stableSince !== null &&
+        clock.now().getTime() - stableSince >= cfg.execution.inactivityTimeoutMs
+      ) {
         const lines = nonEmptyLines(text)
         if (hasInputPrompt(lines)) {
           if (hasRecentQuestion(lines)) {
@@ -295,14 +301,14 @@ export async function pollUntilDone(
             lastText = null
             stableSince = null
           } else {
-            return { status: "completed", durationMs: Date.now() - start }
+            return { status: "completed", durationMs: clock.now().getTime() - start }
           }
         }
         // Idle but not at an input prompt → keep waiting until hard timeout.
       }
     } else {
       lastText = text
-      stableSince = Date.now()
+      stableSince = clock.now().getTime()
     }
 
     tick++
