@@ -220,7 +220,7 @@ describe("runClaudeSession: bin=claude first launch", () => {
       const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
       const log = new MemoryLogger()
       const cfg = testConfig({
-        runtime: { driver: "claude", bin: "claude", extraArgs: [] },
+        runtime: { bin: "claude", extraArgs: [] },
       })
       const result = await runClaudeSession(
         makeOpts({ sentinelFile: sentinel, promptFile, resume: false }),

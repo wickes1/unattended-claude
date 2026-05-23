@@ -5,8 +5,7 @@ paths:
   runtime_dir: ~/unattended
 
 runtime:
-  driver: claude
-  bin: happy                                      # claude TUI wrapper
+  bin: happy                                      # claude TUI wrapper (or `claude` directly)
   extra_args:
     - --dangerously-skip-permissions
 

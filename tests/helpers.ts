@@ -7,7 +7,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     configPath: "/dev/null",
     runtimeDir: "/tmp/ucl-test",
     runtime: {
-      driver: "claude",
       bin: "happy",
       extraArgs: ["--dangerously-skip-permissions"],
     },
