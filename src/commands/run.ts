@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Config } from "../config.ts"
@@ -185,6 +185,37 @@ export function makeBuildWakeUpPrompt(
   }
 }
 
+/**
+ * Create a fresh prompts tmpdir, run `fn` inside it, and clean up the dir
+ * afterward — on normal return, exception, AND on `process.exit()` (which
+ * fires for the SIGINT/SIGTERM path because lifecycle's signal handler ends
+ * by calling `process.exit(0)`, and Node's 'exit' event runs synchronously
+ * just before the process dies).
+ *
+ * This prevents per-run leaks of `mkdtempSync` directories under the OS
+ * tmpdir — relevant for long unattended runs.
+ */
+export async function withPromptsDir<T>(
+  fn: (promptsDir: string) => Promise<T>,
+): Promise<T> {
+  const promptsDir = mkdtempSync(join(tmpdir(), "ucl-prompt-"))
+  let cleaned = false
+  const cleanup = (): void => {
+    if (cleaned) return
+    cleaned = true
+    rmSync(promptsDir, { recursive: true, force: true })
+  }
+  // Synchronous exit-handler covers the signal path (lifecycle calls process.exit
+  // after marking tasks paused, which bypasses any try/finally above us).
+  process.on("exit", cleanup)
+  try {
+    return await fn(promptsDir)
+  } finally {
+    process.off("exit", cleanup)
+    cleanup()
+  }
+}
+
 /** Main `ucl run` entry. */
 export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
   const args = parseRunArgs(argv)
@@ -213,22 +244,23 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
   log.log("info", `run starting; window ends ${windowEnd ? windowEnd.toISOString() : "(unbounded)"}`)
 
   const runtime = new InteractiveZellijRuntime(cfg, log, clock)
-  const promptsDir = mkdtempSync(join(tmpdir(), "ucl-prompt-"))
-  const pb = new PromptBuilder({ promptsDir })
-  return runOrchestrator(
-    {
-      cfg,
-      layout,
-      log,
-      clock,
-      runtime,
-      loadTaskDocs: () => loadTaskDocs(layout),
-      buildPromptFile: makeBuildPromptFile(pb, promptsDir, layout, clock, log),
-      buildWakeUpPrompt: makeBuildWakeUpPrompt(pb),
-    },
-    {
-      windowEndsAt: windowEnd,
-      parentSession: "unattended-claude",
-    },
-  )
+  return withPromptsDir((promptsDir) => {
+    const pb = new PromptBuilder({ promptsDir })
+    return runOrchestrator(
+      {
+        cfg,
+        layout,
+        log,
+        clock,
+        runtime,
+        loadTaskDocs: () => loadTaskDocs(layout),
+        buildPromptFile: makeBuildPromptFile(pb, promptsDir, layout, clock, log),
+        buildWakeUpPrompt: makeBuildWakeUpPrompt(pb),
+      },
+      {
+        windowEndsAt: windowEnd,
+        parentSession: "unattended-claude",
+      },
+    )
+  })
 }

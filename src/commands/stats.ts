@@ -1,5 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { RealClock } from "../clock.ts"
 import type { Config } from "../config.ts"
 import { Layout, fmtDate } from "../layout.ts"
 import { TaskStateStore } from "../orchestrator/state-store.ts"
@@ -81,7 +82,7 @@ export function buildStats(
   now: Date,
 ): StatsSummary {
   const events = readEvents(layout)
-  const store = new TaskStateStore(layout)
+  const store = new TaskStateStore(layout, new RealClock())
   const tasks = store.listAll()
 
   // Group events by day

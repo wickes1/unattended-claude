@@ -129,7 +129,7 @@ export async function runOrchestrator(
 
   // 5. Orphan recovery — at preflight, no zellij tabs exist yet for this run,
   //    so any state.state="running" is an orphan from a prior crashed run.
-  const store = new TaskStateStore(deps.layout)
+  const store = new TaskStateStore(deps.layout, deps.clock)
   for (const id of findOrphans(store, new Set())) {
     await store.update(id, (s) => {
       s.state = "paused"

@@ -224,7 +224,7 @@ describe("applyResult: context_full sets handoff_pending from handoffWritten", (
     const layout = new Layout(dir)
     const clock = new SimClock(new Date("2026-05-23T22:30:00.000Z"))
     const log = new MemoryLogger()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, clock)
     const taskId = "2026-05-23-01-foo"
     const workdir = layout.taskWorkdir(taskId)
     store.init(taskId, workdir, "00000000-0000-0000-0000-000000000001")
@@ -300,7 +300,7 @@ describe("makeBuildPromptFile: handoff read path", () => {
     mkdirSync(layout.handoffsDir, { recursive: true })
     const clock = new SimClock(new Date("2026-05-23T22:30:00.000Z"))
     const log = new MemoryLogger()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, clock)
     const taskId = "2026-05-23-01-foo"
     const workdir = layout.taskWorkdir(taskId)
     store.init(taskId, workdir, "00000000-0000-0000-0000-000000000001")
@@ -414,7 +414,7 @@ describe("runEpisode threads handoffPath into InvokeOpts", () => {
     const layout = new Layout(dir)
     const clock = new SimClock(new Date("2026-05-23T22:30:00.000Z"))
     const log = new MemoryLogger()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, clock)
     const taskId = "2026-05-23-01-foo"
     const workdir = layout.taskWorkdir(taskId)
     store.init(taskId, workdir, "00000000-0000-0000-0000-000000000001")

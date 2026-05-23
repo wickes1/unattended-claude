@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { RealClock, SimClock } from "../src/clock.ts"
 import { Layout } from "../src/layout.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
 
@@ -13,7 +14,7 @@ function freshLayout(): Layout {
 describe("TaskStateStore.init", () => {
   it("creates the state file with correct shape", () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const id = "2026-05-23-01-foo"
     const workdir = "/tmp/work/foo"
     const sessionId = "550e8400-e29b-41d4-a716-446655440000"
@@ -41,13 +42,13 @@ describe("TaskStateStore.init", () => {
 describe("TaskStateStore.load", () => {
   it("returns null when file doesn't exist", () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     expect(store.load("nonexistent")).toBeNull()
   })
 
   it("returns the state when file exists", () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const id = "2026-05-23-01-bar"
     store.init(id, "/tmp/w", "uuid-1")
     const s = store.load(id)
@@ -59,7 +60,7 @@ describe("TaskStateStore.load", () => {
 describe("TaskStateStore.update", () => {
   it("modifies + atomic-writes the state", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const id = "2026-05-23-01-mut"
     store.init(id, "/tmp/w", "uuid-1")
 
@@ -75,7 +76,7 @@ describe("TaskStateStore.update", () => {
 
   it("throws when called on un-initialized task ID", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     await expect(store.update("nope", (s) => s)).rejects.toThrow(
       /task state not initialized/,
     )
@@ -83,7 +84,7 @@ describe("TaskStateStore.update", () => {
 
   it("updates last_updated timestamp automatically", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const id = "2026-05-23-01-ts"
     store.init(id, "/tmp/w", "uuid-1")
     const before = store.load(id)!.last_updated
@@ -100,9 +101,35 @@ describe("TaskStateStore.update", () => {
     expect(new Date(after).getTime()).toBeGreaterThan(new Date(before).getTime())
   })
 
+  it("uses the injected clock for last_updated (SimClock controllable)", async () => {
+    const layout = freshLayout()
+    const fixed = new Date("2026-07-01T12:34:56.000Z")
+    const clock = new SimClock(fixed)
+    const store = new TaskStateStore(layout, clock)
+    const id = "2026-05-23-01-simclock"
+    store.init(id, "/tmp/w", "uuid-1")
+
+    await store.update(id, (s) => {
+      s.current_episode = 1
+    })
+
+    expect(store.load(id)!.last_updated).toBe(fixed.toISOString())
+
+    // Advance the sim clock and update again — last_updated must reflect the
+    // new virtual time, NOT wall-clock.
+    clock.advance(60_000)
+    await store.update(id, (s) => {
+      s.current_episode = 2
+    })
+
+    expect(store.load(id)!.last_updated).toBe(
+      new Date(fixed.getTime() + 60_000).toISOString(),
+    )
+  })
+
   it("serializes concurrent updates to the SAME id (no lost updates)", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const id = "2026-05-23-01-conc"
     store.init(id, "/tmp/w", "uuid-1")
 
@@ -121,7 +148,7 @@ describe("TaskStateStore.update", () => {
 
   it("runs concurrent updates to DIFFERENT ids in parallel", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const ids: string[] = []
     for (let i = 0; i < 10; i++) {
       const id = `2026-05-23-${String(i + 1).padStart(2, "0")}-x`
@@ -161,7 +188,7 @@ describe("TaskStateStore.update", () => {
 
   it("does not block later updates after a failed callback", async () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const id = "2026-05-23-01-fail"
     store.init(id, "/tmp/w", "uuid-1")
 
@@ -183,13 +210,13 @@ describe("TaskStateStore.update", () => {
 describe("TaskStateStore.listAll", () => {
   it("returns empty list when dir doesn't exist", () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     expect(store.listAll()).toEqual([])
   })
 
   it("returns all task states on disk", () => {
     const layout = freshLayout()
-    const store = new TaskStateStore(layout)
+    const store = new TaskStateStore(layout, new RealClock())
     const ids = [
       "2026-05-23-01-a",
       "2026-05-23-02-b",

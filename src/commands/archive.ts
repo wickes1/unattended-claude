@@ -1,5 +1,6 @@
 import { cpSync, existsSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { RealClock } from "../clock.ts"
 import { ensureDir } from "../fs-utils.ts"
 import { appendEvent } from "../events.ts"
 import { Layout } from "../layout.ts"
@@ -105,7 +106,7 @@ export function findArchiveCandidates(
   now: Date,
 ): TaskRuntimeState[] {
   const cutoff = now.getTime() - doneBeforeDays * 24 * 3600_000
-  const store = new TaskStateStore(layout)
+  const store = new TaskStateStore(layout, new RealClock())
   return store.listAll().filter((s) => {
     if (s.state !== "done" && s.state !== "failed") return false
     return new Date(s.last_updated).getTime() < cutoff

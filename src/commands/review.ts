@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Config } from "../config.ts"
+import { findRepoDir } from "../git-utils.ts"
 import { Layout } from "../layout.ts"
 import { ConsoleLogger } from "../logger.ts"
 import { ensureDir } from "../fs-utils.ts"
@@ -96,7 +97,7 @@ export async function cmdReview(cfg: Config, argv: string[]): Promise<void> {
   const synthesisFile = args.synthesize ? join(reviewsDir, `${new Date().toISOString().replace(/[:.]/g, "-")}.md`) : null
 
   const sessionName = `unattended-claude-review-${Date.now()}`
-  const cwd = findRepoDir()
+  const cwd = findThisRepoDir()
   const initialMessage = buildReviewInitialPrompt(layout, events, synthesisFile)
   try {
     await launchInteractiveSession(sessionName, cwd, initialMessage, cfg, log)
@@ -112,13 +113,8 @@ export async function cmdReview(cfg: Config, argv: string[]): Promise<void> {
   }
 }
 
-function findRepoDir(): string {
-  let dir = import.meta.dir
-  for (let i = 0; i < 6; i++) {
-    if (existsSync(join(dir, ".claude", "skills"))) return dir
-    dir = join(dir, "..")
-  }
-  return join(import.meta.dir, "..", "..")
+function findThisRepoDir(): string {
+  return findRepoDir(import.meta.dir) ?? join(import.meta.dir, "..", "..")
 }
 
 export function buildReviewInitialPrompt(layout: Layout, events: Event[], synthesisFile: string | null): string {
