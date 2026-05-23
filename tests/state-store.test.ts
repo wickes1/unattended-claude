@@ -37,6 +37,21 @@ describe("TaskStateStore.init", () => {
     expect(() => new Date(loaded!.created_at).toISOString()).not.toThrow()
     expect(() => new Date(loaded!.last_updated).toISOString()).not.toThrow()
   })
+
+  it("uses the injected clock for created_at + last_updated (SimClock controllable)", () => {
+    // Phase 2 P2-6: init() previously called `new Date().toISOString()`,
+    // bypassing the constructor-injected Clock. Pin SimClock here so a
+    // regression that re-introduces raw `new Date()` would surface as a
+    // mismatch between the fixed virtual time and the wall-clock timestamps.
+    const layout = freshLayout()
+    const fixed = new Date("2026-05-23T12:34:56.000Z")
+    const store = new TaskStateStore(layout, new SimClock(fixed))
+    store.init("2026-05-23-01-clocked", "/tmp/w", "uuid-c")
+
+    const loaded = store.load("2026-05-23-01-clocked")!
+    expect(loaded.created_at).toBe(fixed.toISOString())
+    expect(loaded.last_updated).toBe(fixed.toISOString())
+  })
 })
 
 describe("TaskStateStore.load", () => {
