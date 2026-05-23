@@ -25,11 +25,12 @@ import { archiveOne, findArchiveCandidates } from "../src/commands/archive.ts"
 import { buildStats } from "../src/commands/stats.ts"
 import { extractSummary } from "../src/commands/review.ts"
 import {
-  buildPromptFile,
-  buildWakeUpPrompt,
   loadTaskDocs,
+  makeBuildPromptFile,
+  makeBuildWakeUpPrompt,
 } from "../src/commands/run.ts"
 import { runOrchestrator, type OrchestratorDeps } from "../src/orchestrator/main.ts"
+import { PromptBuilder } from "../src/orchestrator/prompt-builder.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
 import { MockRuntime, simComplete, simRateLimited } from "../src/runtime/mock-runtime.ts"
 import { testConfig } from "./helpers.ts"
@@ -78,6 +79,8 @@ describe("e2e milestone — paused (rate-limit) → resumed → done → archive
     // after applyResult marked the task paused/rate-limit-5h.
     const runtime1 = new MockRuntime([simRateLimited(clock, 60)])
     const win1End = new Date(clock.now().getTime() + 5 * 60_000)
+    const promptsDir = mkdtempSync(join(tmpdir(), "ucl-e2e-prompts-"))
+    const pb = new PromptBuilder({ promptsDir })
     const deps1: OrchestratorDeps = {
       cfg,
       layout,
@@ -85,8 +88,8 @@ describe("e2e milestone — paused (rate-limit) → resumed → done → archive
       clock,
       runtime: runtime1,
       loadTaskDocs: () => loadTaskDocs(layout),
-      buildPromptFile: (t, e, r) => buildPromptFile(t, e, r, layout),
-      buildWakeUpPrompt,
+      buildPromptFile: makeBuildPromptFile(pb, promptsDir),
+      buildWakeUpPrompt: makeBuildWakeUpPrompt(pb),
       installSignals: () => {}, // bypass real signal handlers
     }
     const result1 = await runOrchestrator(deps1, {
