@@ -283,6 +283,164 @@ describe("pollUntilDone — wind-down injection", () => {
   })
 })
 
+// ── pollUntilDone — SimClock-driven timing (F03) ────────────────────
+//
+// These tests prove that every flow-control time reference in
+// pollUntilDone routes through the injected Clock — so SimClock can
+// fast-forward virtual time deterministically and we never have to wait
+// real wall-clock seconds in CI. Each test would have hung or returned
+// the wrong status before F03 (when Date.now() was used directly).
+
+describe("pollUntilDone — clock-driven timing (F03)", () => {
+  test("inactivity at input prompt: SimClock fast-forward → completed", async () => {
+    // Stable input-prompt pane, no recent question → after inactivityTimeoutMs
+    // of sim-time elapses (clock advanced by clock.sleep ticks), returns
+    // completed via the secondary signal. Before F03 this never fired
+    // because the threshold compared real wall-clock to stableSince.
+    const { z } = fakeZellij({ captureScript: () => "normal output\n❯ " })
+    const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+    const log = new MemoryLogger()
+    const cfg = testConfig({
+      execution: {
+        ...testConfig().execution,
+        inactivityTimeoutMs: 5_000, // 5 ticks of clock.sleep(1000)
+      },
+    })
+    const result = await pollUntilDone(
+      // Use a sentinel path that never exists so only the inactivity branch
+      // can complete. Large timeoutMs so hard-timeout cannot win.
+      makeOpts({ sentinelFile: "/tmp/__ucl_test_no_sentinel__", timeoutMs: 60 * 60_000 }),
+      cfg,
+      log,
+      clock,
+      z,
+    )
+    expect(result.status).toBe("completed")
+    if (result.status === "completed") {
+      // Duration must reflect sim-time elapsed, not real wall time.
+      // Minimum: inactivityTimeoutMs (5_000) since stableSince was set on
+      // the first tick and we needed >= threshold elapsed since then.
+      expect(result.durationMs).toBeGreaterThanOrEqual(5_000)
+      // Sanity ceiling: a handful of ticks beyond the threshold.
+      expect(result.durationMs).toBeLessThan(20_000)
+    }
+  })
+
+  test("hard timeout: SimClock advances past timeoutMs while pane keeps changing → timeout", async () => {
+    // Pane text changes on every capture so stableSince resets every tick and
+    // the inactivity branch can never fire. Only the hard-timeout branch
+    // (clock.now() - start >= opts.timeoutMs) can exit the loop. With
+    // timeoutMs = 3_000 and clock.sleep(1000) per tick, we expect timeout
+    // after ~3 ticks of sim-time. Before F03 this would have waited 3
+    // real seconds; now it returns instantly under SimClock.
+    const { z } = fakeZellij({ captureScript: (i) => `tick ${i}\n❯ ` })
+    const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+    const log = new MemoryLogger()
+    const result = await pollUntilDone(
+      makeOpts({ sentinelFile: "/tmp/__ucl_test_no_sentinel__", timeoutMs: 3_000 }),
+      testConfig(),
+      log,
+      clock,
+      z,
+    )
+    expect(result.status).toBe("timeout")
+    // Sim-time must have advanced by at least the timeoutMs.
+    expect(clock.now().getTime()).toBeGreaterThanOrEqual(
+      new Date("2026-05-23T00:00:00Z").getTime() + 3_000,
+    )
+  })
+
+  test("completed durationMs reflects sim-time, not wall-time", async () => {
+    // Sentinel-driven completion after exactly N sim-time ticks. Asserts the
+    // returned durationMs equals the SimClock-elapsed time (was ~0 before F03
+    // because Date.now() barely moved while SimClock ticked).
+    const dir = mkdtempSync(join(tmpdir(), "ucl-duration-"))
+    try {
+      const sentinel = join(dir, "done")
+      const { z } = fakeZellij({
+        captureScript: (i) => {
+          // Write sentinel on the 4th capture (i=3). The loop layout is:
+          //   tick 0: capture (i=0) → no sentinel → sleep 1000
+          //   tick 1: capture (i=1) → no sentinel → sleep 1000
+          //   tick 2: capture (i=2) → no sentinel → sleep 1000
+          //   tick 3: capture (i=3) writes sentinel → sentinel check
+          //           runs next iteration after sleep 1000 (tick 4 capture).
+          // So expected sim-time elapsed when sentinel is observed = 4_000ms.
+          if (i === 3) writeFileSync(sentinel, "done\n")
+          return "❯ "
+        },
+      })
+      const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+      const log = new MemoryLogger()
+      const result = await pollUntilDone(
+        makeOpts({ sentinelFile: sentinel, timeoutMs: 60 * 60_000 }),
+        testConfig(),
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("completed")
+      if (result.status === "completed") {
+        // Duration must equal sim-time, which only advances via clock.sleep.
+        // The sentinel is checked on the iteration following its write, so
+        // durationMs is a multiple of the 1000ms tick. Loose bounds because
+        // the exact tick count depends on capture/sentinel interleaving,
+        // but it MUST be far above wall-time (which is <100ms here).
+        expect(result.durationMs).toBeGreaterThanOrEqual(3_000)
+        expect(result.durationMs).toBeLessThan(20_000)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("wind-down fires exactly at SimClock-driven windDownAt boundary", async () => {
+    // Wind-down boundary is 2500ms after start in sim-time. Before that
+    // boundary, no WIND_DOWN_PROMPT must be sent. After it, exactly one.
+    // Sentinel completes the loop several ticks later.
+    const dir = mkdtempSync(join(tmpdir(), "ucl-winddown-sim-"))
+    try {
+      const sentinel = join(dir, "done")
+      const start = new Date("2026-05-23T00:00:00Z")
+      const windDownAt = new Date(start.getTime() + 2_500)
+      // Track wind-down send order vs capture indices.
+      const { z, calls } = fakeZellij({
+        captureScript: (i) => {
+          // Complete after wind-down has had time to fire.
+          if (i >= 6) writeFileSync(sentinel, "done\n")
+          return "running...\n❯ "
+        },
+      })
+      const clock = new SimClock(start)
+      const log = new MemoryLogger()
+      const result = await pollUntilDone(
+        makeOpts({ sentinelFile: sentinel, windDownAt, timeoutMs: 60 * 60_000 }),
+        testConfig(),
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("completed")
+      const windDownCalls = calls.filter(
+        (c) => c.fn === "sendText" && c.args[2] === WIND_DOWN_PROMPT,
+      )
+      expect(windDownCalls.length).toBe(1)
+      // The wind-down sendText must be preceded by at least 2 captures
+      // (each tick is one capture + one sleep(1000)), proving it didn't
+      // fire before the SimClock crossed the 2500ms boundary.
+      const windDownIdx = calls.findIndex(
+        (c) => c.fn === "sendText" && c.args[2] === WIND_DOWN_PROMPT,
+      )
+      const capturesBeforeWindDown = calls
+        .slice(0, windDownIdx)
+        .filter((c) => c.fn === "capture").length
+      expect(capturesBeforeWindDown).toBeGreaterThanOrEqual(3)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 // ── runClaudeSession — ordering of wakeUpPrompt vs promptFile ──────
 
 describe("runClaudeSession — resume ordering", () => {
