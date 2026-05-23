@@ -266,9 +266,9 @@ describe("cmdSchedule help", () => {
 
 // ─── F11: schedule add / remove ──────────────────────────────────────────────
 
-/** Helper: write a minimal cc.yaml with the given windows and return the path. */
+/** Helper: write a minimal ucl.yaml with the given windows and return the path. */
 function writeConfigYaml(dir: string, windows: ScheduleWindow[]): string {
-  const path = join(dir, "cc.yaml")
+  const path = join(dir, "ucl.yaml")
   const lines = [
     "# user comment we want to preserve",
     "paths:",

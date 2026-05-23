@@ -41,7 +41,7 @@ Commands:
   doctor      Run preflight / health checks (use --json for machine output)
 
 Flags:
-  --config <path>   path to cc.yaml (default ~/.config/unattended-claude/cc.yaml)
+  --config <path>   path to ucl.yaml (default ~/.config/unattended-claude/ucl.yaml)
   --version, -V     print version and exit
   --help, -h        print this help
 
@@ -68,7 +68,7 @@ function resolveConfigPath(argv: string[]): string {
   const i = argv.indexOf("--config")
   if (i >= 0 && argv[i + 1]) return argv[i + 1]!
   if (process.env.UNATTENDED_CLAUDE_CONFIG) return process.env.UNATTENDED_CLAUDE_CONFIG
-  return join(homedir(), ".config", "unattended-claude", "cc.yaml")
+  return join(homedir(), ".config", "unattended-claude", "ucl.yaml")
 }
 
 /** Filter out global flags before passing argv to sub-commands. */

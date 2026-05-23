@@ -5,7 +5,7 @@ export class ConsoleLogger implements Logger {
   log(level: LogLevel, msg: string, extra?: Record<string, unknown>): void {
     const line = JSON.stringify({
       ts: new Date().toISOString(),
-      scope: "cc-nightshift",
+      scope: "unattended-claude",
       level,
       msg,
       ...extra,

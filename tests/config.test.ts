@@ -36,8 +36,8 @@ describe("resolvePath", () => {
 })
 
 describe("loadConfig", () => {
-  it("loads v2 config/cc.yaml with expected shape", () => {
-    const cfg = loadConfig(join(import.meta.dir, "..", "config", "cc.yaml"))
+  it("loads v2 config/ucl.yaml with expected shape", () => {
+    const cfg = loadConfig(join(import.meta.dir, "..", "config", "ucl.yaml"))
     expect(cfg.runtime.driver).toBe("claude")
     expect(cfg.execution.maxParallelTabs).toBe(3)
     expect(cfg.archive.autoAfterDays).toBe(7)
@@ -47,7 +47,7 @@ describe("loadConfig", () => {
   // F04: cooldown + max_consecutive_errors were dead knobs; deleted from the
   // schema. Assert they do not leak back in.
   it("does not expose deleted execution knobs (cooldownMs, maxConsecutiveErrors)", () => {
-    const cfg = loadConfig(join(import.meta.dir, "..", "config", "cc.yaml"))
+    const cfg = loadConfig(join(import.meta.dir, "..", "config", "ucl.yaml"))
     expect((cfg.execution as Record<string, unknown>).cooldownMs).toBeUndefined()
     expect((cfg.execution as Record<string, unknown>).maxConsecutiveErrors).toBeUndefined()
   })
@@ -64,6 +64,6 @@ describe("loadConfig", () => {
   })
 
   it("throws a clear error when file doesn't exist", () => {
-    expect(() => loadConfig("/nonexistent/path/cc.yaml")).toThrow(/Config not found/)
+    expect(() => loadConfig("/nonexistent/path/ucl.yaml")).toThrow(/Config not found/)
   })
 })
