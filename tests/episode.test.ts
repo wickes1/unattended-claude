@@ -76,6 +76,7 @@ function makeCtx(s: Setup, runtime: MockRuntime, over: Partial<EpisodeCtx> = {})
     windDownLeadMs: 5 * 60_000,
     parentSession: "ucl-test",
     contextCompactThreshold: 150_000,
+    episodeHardTimeoutMs: 60 * 60_000,
     ...over,
   }
 }
@@ -345,6 +346,44 @@ describe("buildInvokeOpts: resume flag", () => {
       null,
     )
     expect(opts1.resume).toBe(true)
+  })
+})
+
+describe("buildInvokeOpts: episodeHardTimeoutMs", () => {
+  it("uses ctx.episodeHardTimeoutMs as InvokeOpts.timeoutMs (override default 60m → 1m)", () => {
+    const s = setup()
+    const runtime = new MockRuntime([simComplete(s.clock)])
+    const ctx = makeCtx(s, runtime, { episodeHardTimeoutMs: 60_000 })
+
+    const state = s.store.load(TASK_ID)!
+    const opts = buildInvokeOpts(
+      s.task,
+      state,
+      ctx,
+      s.promptFile,
+      "/tmp/sentinel-1",
+      "/tmp/log-1",
+      null,
+    )
+    expect(opts.timeoutMs).toBe(60_000)
+  })
+
+  it("default ctx (60m) → InvokeOpts.timeoutMs = 3_600_000", () => {
+    const s = setup()
+    const runtime = new MockRuntime([simComplete(s.clock)])
+    const ctx = makeCtx(s, runtime)
+
+    const state = s.store.load(TASK_ID)!
+    const opts = buildInvokeOpts(
+      s.task,
+      state,
+      ctx,
+      s.promptFile,
+      "/tmp/sentinel-1",
+      "/tmp/log-1",
+      null,
+    )
+    expect(opts.timeoutMs).toBe(60 * 60_000)
   })
 })
 

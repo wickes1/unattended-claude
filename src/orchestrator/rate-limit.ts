@@ -14,19 +14,26 @@ import type { Clock } from "../types.ts"
 /**
  * Global rate-limit gate. When any episode hits the limit it calls trip();
  * all lanes pause via waitIfNeeded() until resumeAt.
+ *
+ * `safetyMarginMs` (cfg.rateLimit.safetyMarginMs) is added to every parsed
+ * resume time so lanes wake slightly AFTER the limit actually lifts — this
+ * absorbs clock skew between the local machine and Anthropic's reset clock.
  */
 export class RateLimitGate {
-  /** Current resume time; null = not limited. */
+  /** Current resume time (already padded with safetyMarginMs); null = not limited. */
   resumeAt: Date | null = null
 
+  constructor(private readonly safetyMarginMs: number = 0) {}
+
   /**
-   * Hit the limit — record the resume time (keep the later one, to avoid
-   * moving backwards). If the new resumeAt is earlier than the current value,
-   * the current value is kept.
+   * Hit the limit — record the resume time padded with safetyMarginMs.
+   * Keep the later one to avoid moving backwards; if the new (padded)
+   * resumeAt is earlier than the current value, the current value is kept.
    */
   trip(resumeAt: Date): void {
-    if (this.resumeAt === null || resumeAt.getTime() > this.resumeAt.getTime()) {
-      this.resumeAt = resumeAt
+    const padded = new Date(resumeAt.getTime() + this.safetyMarginMs)
+    if (this.resumeAt === null || padded.getTime() > this.resumeAt.getTime()) {
+      this.resumeAt = padded
     }
   }
 
