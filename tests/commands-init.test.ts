@@ -102,12 +102,10 @@ describe("cmdInit (interactive wizard)", () => {
       log: () => {},
     })
 
-    // User hand-edits an unrelated field.
+    // User hand-edits an unrelated field. Template (see freshDirs above) has no
+    // execution block, so append it — the re-init must preserve it.
     const baseline = readFileSync(configPath, "utf8")
-    const edited = baseline.includes("max_parallel_tabs:")
-      ? baseline.replace(/max_parallel_tabs:\s*\d+/, "max_parallel_tabs: 9")
-      : baseline + "\nexecution:\n  max_parallel_tabs: 9\n"
-    writeFileSync(configPath, edited)
+    writeFileSync(configPath, baseline + "\nexecution:\n  max_parallel_tabs: 9\n")
 
     // Re-init — accept defaults for both prompts (empty string).
     await cmdInit({
