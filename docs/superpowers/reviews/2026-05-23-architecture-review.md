@@ -277,3 +277,51 @@ Ordered by impact × cost. Each is independently shippable.
 - `src/types.ts`
 - `tests/helpers.ts`
 - `tests/dispatcher.test.ts`, `tests/e2e.test.ts`, `tests/smoke.test.ts`, `tests/zellij.test.ts`, `tests/claude-session.test.ts` (spot-checked for surface + structure; remaining 21 test files inventoried but not opened individually)
+
+---
+
+# Delta — v2.0.1 / v2.1 / v2.2 fix pass (2026-05-23, same day)
+
+11 commits land on top of the reviewed state. Test count 325 → 451 (+126), 1 skip, 0 fail. Typecheck clean.
+
+## Fix matrix vs original findings
+
+| Finding | Severity | Resolution | Commit |
+|---|---|---|---|
+| P0-1 `bin: happy` swallows `--session-id` | P0 | F01: dual-mode launch + `/status` slash-command capture for happy mode (jsonl-fallback dropped per user — `/status` is guaranteed). bin=claude still pre-gens via `--session-id`. Live-verified against happy 1.1.8 + claude 2.1.150. | `0e4a525` |
+| P0-2 HANDOFF.md never written/read on context_full | P0 | F02: pollUntilDone injects HANDOFF-writing prompt + waits for file (file-existence authoritative, READY sentinel optional); applyResult emits `handoff_written`; `makeBuildPromptFile` reads handoff + emits `handoff_resumed` on next episode; `handoff_pending` flag on TaskRuntimeState. | `e3e82f4` |
+| P0-3 pollUntilDone mixes `Date.now()` and injected clock | P0 | F03: 6 wall-clock sites → `clock.now().getTime()`; 4 SimClock tests pin inactivity-completion, hard-timeout, duration, wind-down trigger. | `3ae824d` |
+| P1 dead config knobs: `cooldown`, `max_consecutive_errors`, unused `episode_hard_timeout`, unused `safety_margin` | P1 | F04: first two deleted from schema/yaml/tests (whole-repo grep clean); `episodeHardTimeoutMs` wired through `EpisodeCtx` (replaces hardcoded 60min in buildInvokeOpts); `safetyMarginMs` plumbed into RateLimitGate constructor (default 0 for back-compat in test sites). | `3b7c1c8` |
+| P1 declared-unemitted events: `wind_down_injected`, `usage_snapshot` | P1 | F05: pollUntilDone now attaches `windDownInjected: WindDownInfo \| null` to every EpisodeResult; applyResult emits `wind_down_injected` + best-effort `usage_snapshot`. Stats rebased on events.jsonl with jsonl-scan fallback when no snapshots in window. New `src/usage.ts` extracts shared usage helpers to break a layer-inversion. Event field naming aligned to existing `event`/`task` convention. | `29f1264` |
+| P1 schedule install uses `process.argv[1]` | P1 | F06: `resolveProgramPrefix` detects compiled (`ucl`/`unattended-claude` basename) vs source (bun + script path) modes; `--bin <path>` override flag accepted in any position. | `2ef8d1f` |
+| P1 `--until` HH:MM-only | P1 | F07: extracted `parseUntil(input, now)`; `+Nm` / `+Nh` shorthand; QUICK-DEMO updated. | `ecf0c96` |
+| P1 `findRepoDir` duplicated + buildPromptFile tmpdir leak + TaskStateStore bypasses clock | P1/P2 | F08: extracted to `src/git-utils.ts` (verified marker is `.claude/skills` not `.git/` — both copies were byte-identical); `withPromptsDir` wraps cmdRun for single-tmpdir-per-run with `process.on('exit')` cleanup; TaskStateStore constructor takes `Clock`, `update()` uses it. **Out-of-scope flags surfaced**: TaskStateStore.init() and lifecycle.suspendForShutdown also use raw `new Date()` — same bug class, left per Rule 3. | `a31ab2d` |
+| P1 archive.auto_after_days dead | P1 | F10: orchestrator step "5b" runs `findArchiveCandidates` + `archiveOne` (reused verbatim from commands/archive.ts) when threshold > 0; emits `archive_auto` per moved task; per-task try/catch so failure doesn't abort the run. Runs after orphan-recovery (terminal-state tasks are never orphan candidates). | `1593eae` |
+| P2 unreachable `user-stop-now` paused_reason | P2 | F11(a): stop.ts `--now` writes `${stateDir}/stop-now.flag` BEFORE escalating to SIGKILL; lifecycle's new `recoverOrphans` helper picks up the flag and sets `paused_reason="user-stop-now"`, then deletes the flag. SIGTERM path stays "user-stop". | `e736fbc` |
+| P2 `findOrphans` dead Set param | P2 | F11(b): signature now `findOrphans(states)`; call site cleaned. | `e736fbc` |
+| P2 zellij Layer B integration tests deferred from T06 | P2 | F11(d): `tests/zellij-integration.test.ts` spawns real zellij in tmp dir; 5 active tests + 1 skip-when-zellij-absent; closeTab downgraded to "function returns + tracking reset" (zellij 0.44.3 headless does NOT actually remove tabs server-side — verified manually, real upstream limitation, NOT a bug in our code). | `e736fbc` |
+| P2 `schedule add`/`remove` undocumented | P2 | F11(c): `ucl schedule add HH:MM HH:MM` appends to cc.yaml schedule.windows + auto-reinstalls plist; `ucl schedule remove N` removes 1-indexed; both preserve yaml comments via `parseDocument`/`stringify` round-trip. | `e736fbc` |
+| F09 PromptBuilder consolidation | (enabling refactor) | F09: 4 prompt sites collapsed into `src/orchestrator/prompt-builder.ts`; F02 then extended it for HANDOFF resume. `WIND_DOWN_PROMPT` stayed exported from claude-session.ts as single source of truth — PromptBuilder imports it (no duplication, no circular). | `a342b7b` |
+
+## What's still NOT addressed
+
+These items were either out of scope for this pass (Rule 3 — surgical) or surfaced during the work but deliberately deferred. None are production-blockers.
+
+| Item | Why deferred |
+|---|---|
+| `TaskStateStore.init()` uses raw `new Date()` | Same bug class as F08(c) but caller side-effect of init is rare; SimClock-controlled init isn't currently needed by any test. Flagged in F08 commit body. |
+| `lifecycle.suspendForShutdown` uses raw `new Date()` when emitting `task_paused` events | Same class — affects event timestamps under SimClock, not behavior. Flagged in F08 commit body. |
+| zellij headless `closeTab` doesn't remove tabs server-side | Upstream limitation in zellij 0.44.3, not our code. Test downgraded with explanatory comment. |
+| Proactive context-compact at `context_compact_threshold` tokens (DESIGN §七) | Reactive compact via `matchContextLimit` + HANDOFF is now end-to-end; proactive jsonl-size monitoring would be additive optimization, not a fix. |
+| `archiveOne` constructs its own RealClock-backed TaskStateStore | Doesn't break anything; rendering paths read strings. If sim-controlled archive timestamps become useful, refactor then. |
+
+## Quality bar verification
+
+- **451 pass / 1 skip / 0 fail** across 34 test files (was 325 / 0 / 0 across 26 files)
+- `tsc --noEmit` clean
+- Each fix landed as one commit with a clear conventional-commit subject
+- No `git push` performed (per user's hard rule)
+- All subagents reported DONE; surprises documented; no BLOCKED state in the chain
+
+**Verdict update:** The post-pass surface is now what DESIGN.md promised. The "drift between DESIGN.md and code" called out in the original executive summary is closed for the items reviewed. Out-of-scope flags are tracked above for a future v2.2.1 if desired, but none of them affect the demand-shifting north-star scenario.
+
