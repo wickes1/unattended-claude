@@ -15,6 +15,7 @@ import { cmdReview, helpText as reviewHelpText } from "./commands/review.ts"
 import { cmdStats, helpText as statsHelpText } from "./commands/stats.ts"
 import { cmdArchive, helpText as archiveHelpText } from "./commands/archive.ts"
 import { cmdTodo, helpText as todoHelpText } from "./commands/todo.ts"
+import { cmdDoctor, helpText as doctorHelpText } from "./commands/doctor.ts"
 
 import { loadConfig } from "./config.ts"
 import { Layout } from "./layout.ts"
@@ -37,6 +38,7 @@ Commands:
   unarchive   Restore a task bundle from archive
   todo        Manage todo.md (--consolidate)
   attach      Attach to running zellij session
+  doctor      Run preflight / health checks (use --json for machine output)
 
 Flags:
   --config <path>   path to cc.yaml (default ~/.config/unattended-claude/cc.yaml)
@@ -59,6 +61,7 @@ const PER_CMD_HELP: Record<string, string> = {
   unarchive: archiveHelpText,
   todo: todoHelpText,
   attach: attachHelpText,
+  doctor: doctorHelpText,
 }
 
 function resolveConfigPath(argv: string[]): string {
@@ -111,7 +114,7 @@ async function main(): Promise<number> {
   // surface a confusing "config not found" error.
   const KNOWN = new Set([
     "plan", "run", "stop", "schedule", "status", "stats",
-    "review", "archive", "unarchive", "todo", "attach",
+    "review", "archive", "unarchive", "todo", "attach", "doctor",
   ])
   if (!KNOWN.has(cmd)) {
     console.error(`Unknown command: ${cmd}`)
@@ -167,6 +170,8 @@ async function main(): Promise<number> {
     case "attach":
       await cmdAttach()
       return 0
+    case "doctor":
+      return cmdDoctor(cfg, subArgv)
     default:
       console.error(`Unknown command: ${cmd}`)
       console.error(`Run \`ucl --help\` for usage.`)
