@@ -11,7 +11,7 @@
  * that data survives uninstall on purpose (user can reinstall without losing
  * config or task history).
  */
-import { existsSync, lstatSync, rmSync, unlinkSync } from "node:fs"
+import { existsSync, lstatSync, rmdirSync, unlinkSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -34,10 +34,9 @@ if (existsSync(metadataPath)) {
   unlinkSync(metadataPath)
   console.log(`removed  ${metadataPath}`)
   removed++
-  // Best-effort: clean up the metadata dir if now empty. rmSync with
-  // recursive+force tolerates non-empty dirs by not erroring, but we want
-  // a real "only if empty" sweep, so rmSync without recursive.
-  try { rmSync(metadataDir) } catch { /* not empty / not ours — ignore */ }
+  // Best-effort: clean up the metadata dir if now empty. rmdirSync errors
+  // when non-empty, which is the intent ("only if empty").
+  try { rmdirSync(metadataDir) } catch { /* not empty / missing — ignore */ }
 } else {
   console.log(`not present  ${metadataPath}`)
 }

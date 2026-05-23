@@ -1,7 +1,7 @@
 # unattended-claude — v2 設計
 
 > 本文是 2026-05-23 grill-me session 凝結出的 single source of truth。寫 v2 前先讀。
-> v1 設計參考:[`../cc-nightshift/docs/architecture.md`](../cc-nightshift/docs/architecture.md)
+> v1 設計參考:[`../legacy/cc-nightshift/docs/architecture.md`](../legacy/cc-nightshift/docs/architecture.md)
 > v1 的角色:reference-only,不再 active 開發,留作參考 + 部分 code 直接搬。
 
 ---
@@ -47,12 +47,13 @@ Workshop/unattended-claude/unattended-claude/   ← 新 v2 repo
 ├── README.md                                   ← user-facing
 ├── src/, tests/, docs/, .claude/skills/
 ├── package.json, tsconfig.json, bun.lock
-└── config/cc.yaml                              ← config template
+└── config/ucl.yaml                             ← config template
 
-Workshop/unattended-claude/cc-nightshift/       ← v1,reference-only,不動
+Workshop/unattended-claude/legacy/cc-nightshift/   ← v1,reference-only,不動
+Workshop/unattended-claude/legacy/archive/         ← 早期 tmux/zellij 設計稿
 ```
 
-Workshop 層 dir 之後改名 `Workshop/cc-history/`,避免跟 v2 repo 同名。
+外層 `Workshop/unattended-claude/` 維持不變(2026-05-23 consolidation 決定):提一層 / rename 都會破壞 Claude Code session paths,trade-off 換來 v1/v2 並存無干擾。
 
 ### Runtime(資料)
 
