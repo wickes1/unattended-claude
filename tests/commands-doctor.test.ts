@@ -27,7 +27,6 @@ function mkCfg(overrides: { bin?: "claude" | "happy"; runtimeDir?: string; confi
     },
     execution: {
       maxParallelTabs: 3,
-      contextCompactThreshold: 150_000,
       windDownLeadMinutes: 5,
       episodeHardTimeoutMs: 3_600_000,
       inactivityTimeoutMs: 30_000,

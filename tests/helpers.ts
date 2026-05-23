@@ -12,7 +12,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     },
     execution: {
       maxParallelTabs: 3,
-      contextCompactThreshold: 150_000,
       windDownLeadMinutes: 5,
       episodeHardTimeoutMs: 60 * 60_000,
       inactivityTimeoutMs: 30_000,

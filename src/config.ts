@@ -19,7 +19,6 @@ export interface Config {
   }
   execution: {
     maxParallelTabs: number
-    contextCompactThreshold: number
     windDownLeadMinutes: number
     episodeHardTimeoutMs: number
     inactivityTimeoutMs: number
@@ -97,7 +96,6 @@ export function loadConfig(configPath: string): Config {
     },
     execution: {
       maxParallelTabs: raw.execution?.max_parallel_tabs ?? 3,
-      contextCompactThreshold: raw.execution?.context_compact_threshold ?? 150000,
       windDownLeadMinutes: raw.execution?.wind_down_lead_minutes ?? 5,
       episodeHardTimeoutMs: parseDuration(raw.execution?.episode_hard_timeout ?? "60m"),
       inactivityTimeoutMs: parseDuration(raw.execution?.inactivity_timeout ?? "30s"),

@@ -605,7 +605,7 @@ If you really want to test the live detection patterns against real claude:
 - All subsequent `ucl run` calls until that timestamp will refuse: `Weekly limit active until <ts>; skipping run. Use --force to override.`
 
 **Context-full:**
-- Set `execution.context_compact_threshold` very low in ucl.yaml (e.g. 10000) to provoke it artificially. **Don't ship this config**.
+- Reactive only — triggered when claude TUI surfaces "Conversation too long". To exercise the path artificially, drive the mock runtime with that text in a test, or run a long task until it actually hits.
 - Watch for `[warn] context-full detected`, then a `handoff_written` event in `events.jsonl`, then a fresh-session resume in episode N+1.
 
 ---

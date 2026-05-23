@@ -206,7 +206,6 @@ export async function runOrchestrator(
     windowEndsAt: opts.windowEndsAt,
     windDownLeadMs: deps.cfg.execution.windDownLeadMinutes * 60_000,
     parentSession: opts.parentSession,
-    contextCompactThreshold: deps.cfg.execution.contextCompactThreshold,
     episodeHardTimeoutMs: deps.cfg.execution.episodeHardTimeoutMs,
   }
 

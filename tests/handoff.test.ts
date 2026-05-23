@@ -251,7 +251,6 @@ describe("applyResult: context_full sets handoff_pending from handoffWritten", (
       windowEndsAt: null,
       windDownLeadMs: 0,
       parentSession: "ucl-test",
-      contextCompactThreshold: 150_000,
       episodeHardTimeoutMs: 60 * 60_000,
     }
     await applyResult(
@@ -277,7 +276,6 @@ describe("applyResult: context_full sets handoff_pending from handoffWritten", (
       windowEndsAt: null,
       windDownLeadMs: 0,
       parentSession: "ucl-test",
-      contextCompactThreshold: 150_000,
       episodeHardTimeoutMs: 60 * 60_000,
     }
     await applyResult(
@@ -363,7 +361,6 @@ describe("makeBuildPromptFile: handoff read path", () => {
       windowEndsAt: null,
       windDownLeadMs: 0,
       parentSession: "ucl-test",
-      contextCompactThreshold: 150_000,
       episodeHardTimeoutMs: 60 * 60_000,
     }
     await applyResult(s.task, { status: "completed", durationMs: 1000 }, ctx)
@@ -437,7 +434,6 @@ describe("runEpisode threads handoffPath into InvokeOpts", () => {
       windowEndsAt: null,
       windDownLeadMs: 0,
       parentSession: "ucl-test",
-      contextCompactThreshold: 150_000,
       episodeHardTimeoutMs: 60 * 60_000,
     }
     await runEpisode(task, store.load(taskId)!, ctx, join(dir, "prompt.md"), null)
