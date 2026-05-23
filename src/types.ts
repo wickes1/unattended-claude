@@ -107,6 +107,7 @@ export type Event =
   | { ts: string; event: "queued_due_to_concurrency_cap"; task: string }
   | { ts: string; event: "usage_snapshot"; task: string; episode: number; tokens_used: number; source_path: string }
   | { ts: string; event: "archive_moved"; task: string }
+  | { ts: string; event: "archive_auto"; task: string }
   | { ts: string; event: "error"; reason: string }
 
 // ── Cross-cutting (port from v1) ────────────────────

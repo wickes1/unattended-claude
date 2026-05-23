@@ -34,6 +34,7 @@ import {
   suspendForShutdown,
 } from "./lifecycle.ts"
 import { applyResult, runEpisode, type EpisodeCtx } from "./episode.ts"
+import { archiveOne, findArchiveCandidates } from "../commands/archive.ts"
 import * as zellij from "../runtime/zellij.ts"
 
 export interface RunOptions {
@@ -142,6 +143,34 @@ export async function runOrchestrator(
       episode: 0,
       reason: "orphan",
     })
+  }
+
+  // 5b. Auto-archive preflight (F10): move done/failed tasks older than
+  //     cfg.archive.autoAfterDays into archive/. Disabled when value <= 0.
+  //     A per-task failure must not abort the run.
+  if (deps.cfg.archive.autoAfterDays > 0) {
+    const candidates = findArchiveCandidates(
+      deps.layout,
+      deps.cfg.archive.autoAfterDays,
+      deps.clock.now(),
+    )
+    for (const s of candidates) {
+      try {
+        const moved = archiveOne(deps.layout, s.task_id, deps.clock.now())
+        if (moved) {
+          appendEvent(deps.layout, {
+            ts: deps.clock.now().toISOString(),
+            event: "archive_auto",
+            task: s.task_id,
+          })
+        }
+      } catch (e) {
+        deps.log.log(
+          "warn",
+          `auto-archive failed for ${s.task_id}: ${String(e)}; continuing`,
+        )
+      }
+    }
   }
 
   // 6. Create zellij session (best-effort)
