@@ -54,12 +54,17 @@ export function installSignalHandlers(handler: (sig: string) => Promise<void>): 
 /**
  * Mark running tasks as paused with the given reason. Used by SIGTERM handlers
  * and graceful window-end. Returns the ids touched.
+ *
+ * `now` is the wall-clock timestamp written to the emitted `task_paused`
+ * events; threading it through (matching `recoverOrphans`) lets SimClock
+ * control the timestamp in tests instead of leaking raw `new Date()`.
  */
 export async function suspendForShutdown(
   store: TaskStateStore,
   layout: Layout,
   reason: PausedReason,
   log: Logger,
+  now: Date,
 ): Promise<string[]> {
   const touched: string[] = []
   for (const s of store.listAll()) {
@@ -69,7 +74,7 @@ export async function suspendForShutdown(
         cur.paused_reason = reason
       })
       appendEvent(layout, {
-        ts: new Date().toISOString(),
+        ts: now.toISOString(),
         event: "task_paused",
         task: s.task_id,
         episode: s.current_episode,

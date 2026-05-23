@@ -53,7 +53,7 @@ export class TaskStateStore {
 
   /** Initialize a fresh task state file. Overwrites if exists. */
   init(id: string, workdir: string, claudeSessionId: string): void {
-    const now = new Date().toISOString()
+    const now = this.clock.now().toISOString()
     const state: TaskRuntimeState = {
       schema_version: 1,
       task_id: id,

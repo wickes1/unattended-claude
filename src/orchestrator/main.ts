@@ -355,7 +355,7 @@ export async function runOrchestrator(
   if (exitReason === "signal" || exitReason === "window_end") {
     const reason: PausedReason =
       exitReason === "signal" ? "user-stop" : "schedule-boundary"
-    await suspendForShutdown(store, deps.layout, reason, deps.log)
+    await suspendForShutdown(store, deps.layout, reason, deps.log, deps.clock.now())
   }
 
   // 15. Cleanup (best-effort)

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Layout } from "../src/layout.ts"
 import { ensureDir } from "../src/fs-utils.ts"
-import { RealClock } from "../src/clock.ts"
+import { RealClock, SimClock } from "../src/clock.ts"
 import { MemoryLogger } from "../src/logger.ts"
 import { TaskStateStore } from "../src/orchestrator/state-store.ts"
 import { WeeklyLimitGate } from "../src/orchestrator/rate-limit.ts"
@@ -140,7 +140,7 @@ describe("suspendForShutdown", () => {
     await store.update("2026-05-23-01-a", (s) => { s.state = "running" })
     await store.update("2026-05-23-02-b", (s) => { s.state = "running" })
 
-    const touched = await suspendForShutdown(store, layout, "user-stop", new MemoryLogger())
+    const touched = await suspendForShutdown(store, layout, "user-stop", new MemoryLogger(), new Date())
     expect(touched.sort()).toEqual(["2026-05-23-01-a", "2026-05-23-02-b"])
 
     expect(store.load("2026-05-23-01-a")!.state).toBe("paused")
@@ -161,12 +161,30 @@ describe("suspendForShutdown", () => {
     await store.update("2026-05-23-02-done", (s) => { s.state = "done" })
     await store.update("2026-05-23-03-failed", (s) => { s.state = "failed" })
 
-    const touched = await suspendForShutdown(store, layout, "user-stop", new MemoryLogger())
+    const touched = await suspendForShutdown(store, layout, "user-stop", new MemoryLogger(), new Date())
     expect(touched).toEqual([])
 
     expect(store.load("2026-05-23-01-planned")!.state).toBe("planned")
     expect(store.load("2026-05-23-02-done")!.state).toBe("done")
     expect(store.load("2026-05-23-03-failed")!.state).toBe("failed")
+  })
+
+  test("honors the injected `now` for task_paused event ts (SimClock control)", async () => {
+    // Phase 2 P2-6: suspendForShutdown previously wrote `new Date().toISOString()`
+    // for the task_paused event ts, bypassing SimClock. Pinning the timestamp
+    // here proves the new signature actually threads `now` through.
+    const layout = freshLayout()
+    const sim = new SimClock(new Date("2026-05-23T12:34:56Z"))
+    const store = new TaskStateStore(layout, sim)
+    store.init("2026-05-23-01-a", "/tmp/w/a", "uuid-a")
+    await store.update("2026-05-23-01-a", (s) => { s.state = "running" })
+
+    const pausedAt = new Date("2026-05-23T13:00:00Z")
+    await suspendForShutdown(store, layout, "schedule-boundary", new MemoryLogger(), pausedAt)
+
+    const events = readEvents(layout).filter((e) => e.event === "task_paused")
+    expect(events.length).toBe(1)
+    expect(events[0]!.ts).toBe(pausedAt.toISOString())
   })
 })
 
