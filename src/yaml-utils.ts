@@ -6,8 +6,9 @@
  * Path arguments are arrays of string keys (e.g. `["runtime", "bin"]`), which
  * lets us address nested maps without parsing dotted strings.
  */
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { Document, parseDocument } from "yaml"
+import { atomicWrite } from "./fs-utils.ts"
 
 /** Read a YAML file, return Document preserving comments + key order. Throws if file missing. */
 export function readYamlDoc(path: string): Document {
@@ -15,9 +16,9 @@ export function readYamlDoc(path: string): Document {
   return parseDocument(src)
 }
 
-/** Stringify Document back to YAML preserving comments. */
+/** Stringify Document back to YAML preserving comments. Writes atomically — a crash mid-write leaves the original file intact. */
 export function writeYamlDoc(path: string, doc: Document): void {
-  writeFileSync(path, doc.toString())
+  atomicWrite(path, doc.toString())
 }
 
 /** Get a scalar value at the given nested path; returns undefined if path doesn't resolve. */
