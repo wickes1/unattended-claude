@@ -1,5 +1,5 @@
 # unattended-claude — config template
-# Copied to ~/.config/unattended-claude/cc.yaml by `ucl init`
+# Copied to ~/.config/unattended-claude/ucl.yaml by `ucl init`
 
 paths:
   runtime_dir: ~/unattended

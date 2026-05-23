@@ -225,7 +225,7 @@ export async function cmdSchedule(
 
 function cmdScheduleList(cfg: Config, log: (s: string) => void, ops: ScheduleOps): void {
   if (cfg.schedule.windows.length === 0) {
-    log("No schedule windows configured. Add to cc.yaml then `ucl schedule install`.")
+    log("No schedule windows configured. Add to ucl.yaml then `ucl schedule install`.")
   } else {
     log("Configured windows:")
     for (const w of cfg.schedule.windows) {
@@ -310,7 +310,7 @@ function assertHHMM(s: string): void {
 }
 
 /**
- * Read-modify-write the user's cc.yaml at cfg.configPath, mutating
+ * Read-modify-write the user's ucl.yaml at cfg.configPath, mutating
  * `schedule.windows` via the supplied callback. Uses yaml.parseDocument so
  * comments and unrelated keys survive the round-trip. Returns the new windows
  * array (so the caller can immediately re-install plists without reloading).

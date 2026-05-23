@@ -50,12 +50,12 @@ describe("parseSessionList", () => {
   test("parses names and EXITED status", () => {
     const out =
       "unique-mouse [Created 10h ago]\n" +
-      "cc-nightshift-x [Created 1s ago]\n" +
-      "cc-nightshift-dead [Created 2h ago] (EXITED - attach to resurrect)\n"
+      "unattended-claude-x [Created 1s ago]\n" +
+      "unattended-claude-dead [Created 2h ago] (EXITED - attach to resurrect)\n"
     expect(parseSessionList(out)).toEqual([
       { name: "unique-mouse", exited: false },
-      { name: "cc-nightshift-x", exited: false },
-      { name: "cc-nightshift-dead", exited: true },
+      { name: "unattended-claude-x", exited: false },
+      { name: "unattended-claude-dead", exited: true },
     ])
   })
 })

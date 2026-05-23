@@ -11,7 +11,7 @@ This is **not** an automated test suite. `tests/e2e.test.ts` already covers the 
 
 - **Runtime dir is `~/unattended/`** (no leading dot, not `~/.unattended-claude/`). Short on purpose.
 - **Zellij socket dir is forced to `/tmp/zellij`** by every `ucl` command. macOS `$TMPDIR` is too long for Unix-socket paths (107-byte limit) so we sidestep it. Don't manually `export ZELLIJ_SOCKET_DIR=...` to a long path or zellij will silently fail to find sessions.
-- **`runtime.bin` choice matters for resume.** The default template ships `bin: happy`, but T09 spike (2026-05-23) confirmed Happy's `--session-id <uuid>` flag is **not honored** — Happy stores its own internal conversation uuid. So if you want cross-window `--resume` to actually pick up the same Claude conversation, edit `~/.config/unattended-claude/cc.yaml` and set `runtime.bin: claude`. Happy mobile-observability + working `--resume` is **not currently possible** — pick one. (Reference: `src/runtime/claude-session.ts` line 80–103.)
+- **`runtime.bin` choice matters for resume.** The default template ships `bin: happy`, but T09 spike (2026-05-23) confirmed Happy's `--session-id <uuid>` flag is **not honored** — Happy stores its own internal conversation uuid. So if you want cross-window `--resume` to actually pick up the same Claude conversation, edit `~/.config/unattended-claude/ucl.yaml` and set `runtime.bin: claude`. Happy mobile-observability + working `--resume` is **not currently possible** — pick one. (Reference: `src/runtime/claude-session.ts` line 80–103.)
 - **Plan/review skills load via cwd.** `ucl plan` and `ucl review` spawn claude with `cwd = v2 repo root`, so `.claude/skills/task-brief/` and `.claude/skills/task-review/` auto-load from the project. You must invoke `ucl` from a shell whose `$PATH` resolves to a `ucl` whose import.meta.dir walks up to the right repo. If you've installed `ucl` system-wide and detached from the repo, the skills won't load — check `findRepoDir()` in `src/commands/plan.ts`.
 - **Never `git push` or commit anything `ucl` produced** without reviewing it first. Standard rule.
 
@@ -47,9 +47,21 @@ zellij 0.42.x
 
 **If it fails:**
 - `claude` missing → `npm install -g @anthropic-ai/claude-code` (or whatever the official install is at the time)
-- `happy` missing → only required if you keep `runtime.bin: happy` in cc.yaml. If you switched to `claude`, ignore.
+- `happy` missing → only required if you keep `runtime.bin: happy` in ucl.yaml. If you switched to `claude`, ignore.
 - `zellij` missing → `brew install zellij`
 - `bun` too old → `curl -fsSL https://bun.sh/install | bash`
+
+**Then link `ucl` onto your PATH:**
+```bash
+cd /Users/week-mac/Fonds/Workshop/unattended-claude/unattended-claude
+bun link                           # registers this repo as the source for `ucl`
+bun link unattended-claude         # symlinks `ucl` into ~/.bun/bin
+which ucl                          # → /Users/week-mac/.bun/bin/ucl
+```
+
+`bun link` keeps the symlink pointing at `./src/index.ts`, so any code change is picked up immediately — no rebuild step. If you ever want a self-contained binary instead, use `bun build --compile src/index.ts --outfile ~/.local/bin/ucl`.
+
+The rest of this guide uses `ucl <cmd>` throughout. If you skipped the link step, prefix each command with `bun src/index.ts ` from inside the repo dir instead — same code path, just more typing.
 
 ---
 
@@ -57,16 +69,14 @@ zellij 0.42.x
 
 **Run:**
 ```bash
-cd /Users/week-mac/Fonds/Workshop/unattended-claude/unattended-claude
-bun src/index.ts init
-# or, if you've linked it: ucl init
+ucl init
 ```
 
 **Expected output:**
 ```
 unattended-claude initialized.
   - Created empty todo.md at /Users/week-mac/unattended/todo.md
-  - Created config at /Users/week-mac/.config/unattended-claude/cc.yaml
+  - Created config at /Users/week-mac/.config/unattended-claude/ucl.yaml
   (if any of claude/happy/zellij are missing on PATH, you'll see WARN lines here)
 
 Next steps:
@@ -78,11 +88,11 @@ Next steps:
 **Verify:**
 - `ls ~/unattended/` shows `archive/  logs/  state/  tasks/  todo.md  workdirs/`
 - `ls ~/unattended/state/` shows `handoffs/  tasks/` (empty)
-- `cat ~/.config/unattended-claude/cc.yaml` matches `config/cc.yaml` in the repo
+- `cat ~/.config/unattended-claude/ucl.yaml` matches `config/ucl.yaml` in the repo
 - Re-running `ucl init` is idempotent — no overwrites, says "Config exists at ... (kept; edit manually if needed)"
 
 **If it fails:**
-- "init template not found" → you ran `bun src/index.ts` from somewhere other than the repo. cd to the repo root.
+- "init template not found" → you ran `ucl` from somewhere other than the repo. cd to the repo root.
 - Permissions on `~/.config/` denied → `mkdir -p ~/.config && chmod u+w ~/.config`
 - Want to nuke and redo: `rm -rf ~/unattended ~/.config/unattended-claude` then re-init. (No automatic flag — intentional.)
 
@@ -93,12 +103,17 @@ Next steps:
 **Run:**
 ```bash
 cat >> ~/unattended/todo.md <<'EOF'
-- [ ] write a tiny smoke task: create hello.py that prints "hello from ucl", then write result.md saying "done"
+- [ ] hello smoke: create hello.py that prints "hello from ucl", run it once, write result.md saying "done"
+- [ ] fib ten: create fib.py that prints the first 10 Fibonacci numbers (one per line), run it, save stdout to fib.txt
+- [ ] readme count: write a one-line README.md describing this workdir, then count its words and write the number to count.txt
+- [ ] timestamps: write the current time to time.md in three formats — ISO-8601, unix epoch seconds, and human-readable "Mon DD HH:MM TZ"
 EOF
 
-# Optionally edit the cc.yaml first to set runtime.bin: claude (see callout above)
-bun src/index.ts plan
+# Optionally edit the ucl.yaml first to set runtime.bin: claude (see callout above)
+ucl plan
 ```
+
+> Four tiny tasks → four separate task docs → with `execution.max_parallel_tabs: 3` (default in `ucl.yaml`), the first three will dispatch into parallel zellij tabs and the fourth will queue until a slot frees up. If you want pure serial execution instead, drop `max_parallel_tabs` to `1` before running.
 
 **Expected output (terminal):**
 ```
@@ -107,18 +122,18 @@ bun src/index.ts plan
 ```
 
 Inside claude, the initial prompt triggers the **task-brief** skill (loaded from `.claude/skills/task-brief/`). It will:
-1. Echo the unchecked todo line(s).
-2. Ask 1–2 clarifying questions (scope, workdir, serial?).
-3. Write `~/unattended/tasks/2026-05-23-01-hello-smoke.md` (or similar) with frontmatter (title, workdir, serial).
-4. Rewrite todo.md to mark the line `- [x] ...` with a task-link suffix like `→ 2026-05-23-01-hello-smoke`.
+1. Echo the unchecked todo lines.
+2. Ask 1–2 clarifying questions per todo (scope, workdir, serial?) — answer briefly, these are tiny tasks.
+3. Write one task doc per todo into `~/unattended/tasks/`, numbered sequentially: `2026-05-23-01-hello-smoke.md`, `2026-05-23-02-fib-ten.md`, etc. Each has frontmatter (title, workdir, serial).
+4. Rewrite todo.md to mark each line `- [x] ...` with a task-link suffix like `→ 2026-05-23-01-hello-smoke`.
 5. `/exit` claude.
 
 When claude exits, the zellij session is killed (see `finally` block in `plan.ts`) and you return to your shell.
 
 **Verify:**
-- `ls ~/unattended/tasks/` shows a new `.md` file with a valid task ID (`YYYY-MM-DD-NN-slug.md`).
-- `head -10 ~/unattended/tasks/<id>.md` shows frontmatter with `title:`, `workdir:`, `serial: false` (or true if you said serial).
-- `cat ~/unattended/todo.md` — the planned line is now `- [x] ... → <id>`.
+- `ls ~/unattended/tasks/` shows **four** new `.md` files with valid task IDs (`YYYY-MM-DD-NN-slug.md`, numbered 01–04).
+- `head -10 ~/unattended/tasks/2026-05-23-01-*.md` shows frontmatter with `title:`, `workdir:`, `serial: false`.
+- `cat ~/unattended/todo.md` — all four planned lines are now `- [x] ... → <id>`.
 
 **If it fails:**
 - task-brief skill doesn't load (claude doesn't mention it by name) → you're not in the repo cwd. Check `findRepoDir()` walks up from `src/commands/plan.ts` and finds `.claude/skills/`.
@@ -134,33 +149,44 @@ When claude exits, the zellij session is killed (see `finally` block in `plan.ts
 **Run:**
 ```bash
 # in terminal A
-bun src/index.ts run --until +5m
+ucl run --until +5m
 # equivalent (assuming it's currently 22:00):
-# bun src/index.ts run --until 22:05
+# ucl run --until 22:05
 ```
 
 **Expected output (in terminal A — orchestrator foreground):**
 ```
 [info] run starting; window ends 2026-05-23T22:05:00.000Z
 [info] dispatching task 2026-05-23-01-hello-smoke (episode 1)
+[info] dispatching task 2026-05-23-02-fib-ten (episode 1)
+[info] dispatching task 2026-05-23-03-readme-count (episode 1)
 [info] zellij newSession unattended-claude
 [info] zellij newTab unattended-claude tab=2026-05-23-01-hello-smoke
-[info] dialog: trust folder → Enter         (only if the workdir is new)
-... (poll loop ticks silently)
+[info] zellij newTab unattended-claude tab=2026-05-23-02-fib-ten
+[info] zellij newTab unattended-claude tab=2026-05-23-03-readme-count
+[info] dialog: trust folder → Enter         (per tab on first launch)
+... (poll loop ticks silently — 2026-05-23-04-timestamps waits for a slot)
+[info] task state: running → done   task=2026-05-23-01-hello-smoke
+[info] dispatching task 2026-05-23-04-timestamps (episode 1)
+[info] zellij newTab unattended-claude tab=2026-05-23-04-timestamps
 ```
+
+(Order will vary depending on which tiny task finishes first.)
 
 **In a second terminal (B) — attach and watch:**
 ```bash
-bun src/index.ts attach
+ucl attach
 ```
 
-You should see claude running inside the zellij tab, working on hello.py. Detach without killing:
+You should see **three claude tabs running in parallel** inside the `unattended-claude` zellij session — switch between them with `Ctrl-o` then `Tab` (or `Ctrl-t` if you set a custom keybind). When one finishes its tab closes and the fourth (`timestamps`) opens in its place. Detach without killing:
 - Press `Ctrl-o` then `d` — zellij's default detach chord. Your terminal returns to your shell; the worker keeps running in terminal A.
 
 **Verify:**
 - `ZELLIJ_SOCKET_DIR=/tmp/zellij zellij list-sessions` shows `unattended-claude` (no EXITED tag).
-- `cat ~/unattended/state/tasks/<id>.json` shows `"state": "running"`, `"claude_session_id": "<uuid>"`, `"current_episode": 1`.
-- `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` exists and is growing.
+- `ucl status` mid-run shows e.g. `running: 3  paused: 0  done: 1  planned: 0` (cap 3/3 used while three are in flight).
+- `cat ~/unattended/state/tasks/2026-05-23-01-*.json` shows `"state": "running"` (then `"done"`), `"claude_session_id": "<uuid>"`, `"current_episode": 1`.
+- After all four are done: `ls ~/unattended/workdirs/` shows four workdir directories, each with its task's artifacts (`hello.py`/`result.md`, `fib.py`/`fib.txt`, `README.md`/`count.txt`, `time.md`).
+- `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` files exist — one per task.
 
 **If it fails:**
 - `ucl attach` says "No worker running" → check terminal A; the orchestrator may have already finished or crashed. `cat ~/unattended/state/.lock` to see if the PID is still alive.
@@ -178,10 +204,10 @@ You should see claude running inside the zellij tab, working on hello.py. Detach
 
 ```bash
 # window 1 — terminal A
-bun src/index.ts run --until +5m    # short window so we hit wind-down
+ucl run --until +5m    # short window so we hit wind-down
 ```
 
-Wait for the wind-down. At T-2min (per default `wind_down_lead_minutes: 5`, but can be reduced via cc.yaml for testing), the orchestrator injects the wind-down prompt into the claude tab. At T-0 the window closes.
+Wait for the wind-down. At T-2min (per default `wind_down_lead_minutes: 5`, but can be reduced via ucl.yaml for testing), the orchestrator injects the wind-down prompt into the claude tab. At T-0 the window closes.
 
 **Expected log lines (terminal A):**
 ```
@@ -193,7 +219,7 @@ Wait for the wind-down. At T-2min (per default `wind_down_lead_minutes: 5`, but 
 
 **Verify intermediate state:**
 ```bash
-bun src/index.ts status
+ucl status
 # Should show:
 #   planned: 0  running: 0  paused: 1  done: 0  failed: 0
 #   Paused:
@@ -202,7 +228,7 @@ bun src/index.ts status
 
 **Run window 2 (after window 1 has fully cleaned up):**
 ```bash
-bun src/index.ts run --until +15m
+ucl run --until +15m
 ```
 
 **Expected log lines:**
@@ -232,10 +258,10 @@ bun src/index.ts run --until +15m
 **Run:**
 ```bash
 # terminal A
-bun src/index.ts run --until 23:59         # long window
+ucl run --until 23:59         # long window
 
 # terminal B (after task is running)
-bun src/index.ts stop
+ucl stop
 ```
 
 **Expected output (terminal B):**
@@ -253,7 +279,7 @@ Orchestrator exited cleanly.
 ```
 
 **Verify:**
-- `bun src/index.ts status` shows the task `paused` with reason `user-stop`.
+- `ucl status` shows the task `paused` with reason `user-stop`.
 - `ls ~/unattended/state/.lock` is gone (cleared on graceful exit).
 - Wake-up prompt on next `ucl run` will be: "Manual stop ended. Continue from where you stopped." (`buildWakeUpPrompt` for `"user-stop"`).
 
@@ -268,10 +294,10 @@ Orchestrator exited cleanly.
 **Run:**
 ```bash
 # terminal A
-bun src/index.ts run --until 23:59
+ucl run --until 23:59
 
 # terminal B
-bun src/index.ts stop --now
+ucl stop --now
 ```
 
 **Expected output (terminal B):**
@@ -285,7 +311,7 @@ Escalated to SIGKILL (PID xxxxx).
 **Verify:**
 - Orchestrator process in terminal A is dead immediately, no graceful pause.
 - `~/unattended/state/.lock` is **still on disk** (no cleanup happened — SIGKILL gives no chance to run handlers).
-- `bun src/index.ts status` may still show the task as `running` (state file wasn't updated).
+- `ucl status` may still show the task as `running` (state file wasn't updated).
 - **Next `ucl run` will detect the orphan**: the lockfile PID is no longer alive, the state says running, so the orchestrator marks it `paused-orphan` and wakes up with: "Previous session was interrupted unexpectedly (machine reboot or process death). Continue, but please first verify current file/test state."
 
 **If it fails:**
@@ -296,9 +322,9 @@ Escalated to SIGKILL (PID xxxxx).
 
 ## 8. Schedule install / uninstall — `ucl schedule`
 
-> macOS launchd. Edit `cc.yaml` first to add at least one window.
+> macOS launchd. Edit `ucl.yaml` first to add at least one window.
 
-**Edit `~/.config/unattended-claude/cc.yaml`:**
+**Edit `~/.config/unattended-claude/ucl.yaml`:**
 ```yaml
 schedule:
   windows:
@@ -309,7 +335,7 @@ schedule:
 
 **Run:**
 ```bash
-bun src/index.ts schedule list
+ucl schedule list
 ```
 
 **Expected output:**
@@ -323,7 +349,7 @@ Installed plists in /Users/week-mac/Library/LaunchAgents:
 
 **Install:**
 ```bash
-bun src/index.ts schedule install
+ucl schedule install
 ```
 
 **Expected:**
@@ -335,11 +361,11 @@ loaded  /Users/week-mac/Library/LaunchAgents/dev.unattended-claude.2200-0600.pli
 - `ls ~/Library/LaunchAgents/dev.unattended-claude.*` shows the plist file.
 - `cat ~/Library/LaunchAgents/dev.unattended-claude.2200-0600.plist` — XML with `<Weekday>1</Weekday>` (Mon) through `<Weekday>5</Weekday>` (Fri), `<Hour>22</Hour>`, `<Minute>0</Minute>`.
 - `launchctl list | grep unattended` shows the agent loaded.
-- `bun src/index.ts schedule list` now lists the installed plist filename.
+- `ucl schedule list` now lists the installed plist filename.
 
 **Uninstall:**
 ```bash
-bun src/index.ts schedule uninstall
+ucl schedule uninstall
 ```
 
 **Expected:**
@@ -354,7 +380,7 @@ removed  /Users/week-mac/Library/LaunchAgents/dev.unattended-claude.2200-0600.pl
 **If it fails:**
 - `loaded  ...` becomes `wrote (load failed)  ...` → **most likely cause: macOS Full Disk Access**. The `bun` binary (or wherever `process.argv[1]` resolves to) needs FDA to be invoked by launchd. Go to System Settings → Privacy & Security → Full Disk Access, click `+`, add `/Users/week-mac/.bun/bin/bun` (or the linked `ucl` binary).
 - The plist exists but doesn't actually fire at 22:00 → `log stream --predicate 'subsystem == "com.apple.xpc.launchd"'` while waiting; check StandardErrorPath at `~/unattended/logs/schedule.err.log`.
-- `exePath` in the plist is wrong (points to bun, not ucl) → that's expected for a `bun src/index.ts` invocation; the plist will run `<bun-binary> run --until 06:00` which is **not** what you want — bun's `run` subcommand isn't `ucl run`. **Fix**: build a proper executable wrapper or install `ucl` as a npm/bun bin. For now, until a wrapper exists, treat `schedule install` as code-tested-not-yet-deployed.
+- `ProgramArguments` in the plist looks wrong → `schedule install` auto-detects whether you're running the linked `ucl` (compiled-style invocation) or `bun src/index.ts` (source-style) and writes the matching args. If detection picks the wrong mode, pass `--bin <abs-path>` to override: `ucl schedule install --bin /Users/week-mac/.bun/bin/ucl`.
 
 ---
 
@@ -366,7 +392,7 @@ Run a few tasks to completion first so there's data. Then:
 
 **Run:**
 ```bash
-bun src/index.ts status
+ucl status
 ```
 
 **Expected:**
@@ -395,8 +421,8 @@ Cap: 1/3 used
 
 **Run:**
 ```bash
-bun src/index.ts stats              # default 7 days
-bun src/index.ts stats --days 30
+ucl stats              # default 7 days
+ucl stats --days 30
 ```
 
 **Expected:** (token numbers depend on real claude jsonl, will be 0 if you only ran MockRuntime tests)
@@ -422,7 +448,7 @@ Totals: done=4  failed=0  tokens=411,272
 **Run:**
 ```bash
 ls ~/unattended/tasks/                              # pick an id
-bun src/index.ts review 2026-05-23-01-hello-smoke
+ucl review 2026-05-23-01-hello-smoke
 ```
 
 **Expected:** prints the `## Summary` section of the task doc to stdout. If the task doesn't have one yet, prints `(no SUMMARY section yet for <id>)`.
@@ -431,7 +457,7 @@ bun src/index.ts review 2026-05-23-01-hello-smoke
 
 **Run:**
 ```bash
-bun src/index.ts review --synthesize --since 24h
+ucl review --synthesize --since 24h
 ```
 
 **Expected:** Spawns a fresh claude session inside zellij, attaches your terminal. The initial prompt loads the **task-review** skill from `.claude/skills/task-review/` and feeds it the last 24 hours of `events.jsonl`. The skill walks you through reviewing what was done; on exit, writes a markdown report to `~/unattended/reviews/<ISO-timestamp>.md`.
@@ -452,7 +478,7 @@ bun src/index.ts review --synthesize --since 24h
 
 **Run (single task):**
 ```bash
-bun src/index.ts archive 2026-05-23-01-hello-smoke
+ucl archive 2026-05-23-01-hello-smoke
 ```
 
 **Expected:**
@@ -481,19 +507,19 @@ grep archive_moved ~/unattended/state/events.jsonl | tail -1
 
 **Run (batch archive — dry-run first!):**
 ```bash
-bun src/index.ts archive --done-before 7d --dry-run
+ucl archive --done-before 7d --dry-run
 # would archive 3 task(s):
 #   2026-05-16-01-foo  (done, last_updated 2026-05-16T...)
 #   ...
 
-bun src/index.ts archive --done-before 7d
+ucl archive --done-before 7d
 # archived 2026-05-16-01-foo
 # archived ...
 ```
 
 **Unarchive (test the reverse):**
 ```bash
-bun src/index.ts unarchive 2026-05-23-01-hello-smoke
+ucl unarchive 2026-05-23-01-hello-smoke
 # unarchived 2026-05-23-01-hello-smoke
 ```
 
@@ -512,7 +538,7 @@ After several plan cycles, `~/unattended/todo.md` accumulates `- [x] ... → <id
 
 **Run:**
 ```bash
-bun src/index.ts todo --consolidate
+ucl todo --consolidate
 ```
 
 **Expected output:**
@@ -579,7 +605,7 @@ If you really want to test the live detection patterns against real claude:
 - All subsequent `ucl run` calls until that timestamp will refuse: `Weekly limit active until <ts>; skipping run. Use --force to override.`
 
 **Context-full:**
-- Set `execution.context_compact_threshold` very low in cc.yaml (e.g. 10000) to provoke it artificially. **Don't ship this config**.
+- Set `execution.context_compact_threshold` very low in ucl.yaml (e.g. 10000) to provoke it artificially. **Don't ship this config**.
 - Watch for `[warn] context-full detected`, then a `handoff_written` event in `events.jsonl`, then a fresh-session resume in episode N+1.
 
 ---
@@ -590,14 +616,14 @@ After demoing all of this, your `~/unattended/` will be cluttered. Clean up:
 
 ```bash
 # Archive everything done older than 0 days (i.e., everything done)
-bun src/index.ts archive --done-before 0d --dry-run
-bun src/index.ts archive --done-before 0d
+ucl archive --done-before 0d --dry-run
+ucl archive --done-before 0d
 
 # Consolidate journal
-bun src/index.ts todo --consolidate
+ucl todo --consolidate
 
 # Uninstall any schedule plists you installed for testing
-bun src/index.ts schedule uninstall
+ucl schedule uninstall
 
 # (Optional) nuke everything and start fresh
 rm -rf ~/unattended ~/.config/unattended-claude
