@@ -297,3 +297,58 @@ After running, fill the Actual column inline AND add a bottom section:
 ```
 
 Commit when done: `docs(runbooks): live e2e milestone run yyyy-mm-dd`.
+
+---
+
+## Run log — 2026-05-23 18:21-18:33 EDT (initial e2e attempt)
+
+**Verdict: BLOCKED on gate A. Two distinct upstream bugs surfaced; the demand-shift mechanism cannot work today without changes.**
+
+- bins tested: `happy` first (gate A fail), then `bin: claude` (gate A also fail in a different way)
+- gates passed: none
+- gates failed: A (both bins, different reasons)
+- gates not reached: B, C, D, E, F (depend on session staying alive past first prompt)
+- duration: ~40 min including investigation
+- run cost: ~0 user tokens — claude session opened but the user prompt never reached the model (see bug #2 below)
+
+### Bug 1 — `happy --session-id` discovery via `/status` slash command times out (10s)
+
+- bin: happy
+- F01 fix introduced `discoverViaStatus`. With happy 1.1.8 + claude 2.1.150 (the exact versions F01 claimed live-verified against), `/status` either doesn't render a "Session ID:" line within 10s or renders one in a format the parser doesn't match.
+- Symptom: `task_failed reason="session-id discovery failed: discoverViaStatus: failed to parse Session ID from /status panel within 10000ms (last: no Session ID line)"`
+- evidence: `~/unattended/state/events.jsonl` first run
+- F01's verification was likely partial — discovery may have worked then but happy / claude changed format, OR F01 measured something other than "the parsed UUID matches the jsonl filename"
+
+### Bug 2 — `claude --session-id <uuid>` is **not** honored in interactive TUI mode
+
+- bin: claude
+- `claude --session-id <UUID> --dangerously-skip-permissions` launched in zellij tab. State.json records the pre-gen UUID (e.g. `4aa7ae62-…`). Claude creates a jsonl with a **different** UUID (`2548b3b8-…`).
+- Reproduction via `-p` non-interactive mode honors the flag correctly (`/private/tmp/claude-test/11111111-…jsonl` matches the requested UUID).
+- So `--session-id` works in **headless** mode but is ignored in **TUI** mode. This is either a Claude Code 2.1.150 bug or undocumented behavior.
+- Impact: cross-window resume via `--resume <uuid>` cannot work because the recorded UUID was never bound to a real jsonl. The orchestrator would `--resume 4aa7ae62-…` and claude would refuse / open a fresh session.
+- The architecture review's F01 delta said *"bin=claude still pre-gens via --session-id. Live-verified against happy 1.1.8 + claude 2.1.150"* — this verification was wrong (it never compared the on-disk jsonl filename to the requested UUID).
+
+### Bug 3 (suspected, not isolated) — prompt paste race with claude-mem SessionStart hook
+
+- After bug 1/2, the orchestrator also hit a downstream symptom: paste injection fired but no AI response, runtime declared `task_done` via inactivity after ~50-90s; the claude jsonl had only SessionStart-hook content, never the pasted task prompt.
+- claude-mem plugin's `SessionStart` hook fires synchronously at session boot, dumps observation context, and the user's input prompt becomes available before the dump has fully settled. `hasInputPrompt` matched the transient `❯` line, paste fired, paste was discarded by TUI.
+- A 2-second settle delay after `handleDialogs` did **not** fix it — suggesting the issue is more than a single race.
+- Manual paste to the same pane after claude was fully idle landed correctly, ruling out pane-id mis-tracking or paste-mechanism issues.
+- This bug was not investigated deeper because bug 2 makes cross-window resume impossible regardless.
+
+### State left behind
+
+- `~/unattended/` removed.
+- `unattended-claude` zellij sessions cleaned up.
+- The 2-second settle-delay patch was reverted (didn't help).
+- v2 source unchanged from main HEAD.
+- Tests still 485 pass / 1 skip / 0 fail.
+
+### Recommended next actions (in order)
+
+1. **Repro bug 2 in isolation** — write a 5-line shell script that launches `claude --session-id <fixed-uuid> --dangerously-skip-permissions` in a zellij tab, sends a one-word user message, exits, and checks whether `~/.claude/projects/.../fixed-uuid.jsonl` exists. If the jsonl filename matches, F01 is somehow regressing only in our orchestrator's invocation; if not, file an upstream issue.
+2. **Decide cross-window strategy if `--session-id` truly is TUI-broken**:
+   - Option A: post-hoc discovery via `/status` slash command for both bins (fix bug 1 first)
+   - Option B: post-hoc discovery via filesystem watch on `~/.claude/projects/<encoded-cwd>/*.jsonl` — pick up whichever new jsonl appears within N seconds of launch
+   - Option C: **HANDOFF.md as the primary cross-window path**, dropping `--resume` reliance entirely (turns context-full into the normal case, not the fallback)
+3. **Bug 3 deferred** — only matters once bug 1 or 2 is resolved.
