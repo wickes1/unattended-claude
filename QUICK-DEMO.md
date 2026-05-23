@@ -72,7 +72,7 @@ unattended-claude initialized.
 Next steps:
   1. Edit /Users/week-mac/unattended/todo.md — add what you want done.
   2. Run `ucl plan` to convert todos into task docs.
-  3. Run `ucl run --until <HH:MM>` when you're leaving the keyboard.
+  3. Run `ucl run --until <HH:MM | +Nm | +Nh>` when you're leaving the keyboard.
 ```
 
 **Verify:**
@@ -129,12 +129,14 @@ When claude exits, the zellij session is killed (see `finally` block in `plan.ts
 
 ## 4. Manual run — `ucl run --until +5m`
 
-> Heads up: `--until` takes `HH:MM` (24h clock), NOT `+5m`. The spec mentioned `+5m` shorthand but `parseRunArgs` only handles `HH:MM`. Compute the time yourself.
+> `--until` accepts `HH:MM` (24h clock), `+Nm` (N minutes from now), or `+Nh` (N hours from now). `HH:MM` rolls to tomorrow if it's already past.
 
-**Run:** (assuming it's currently 22:00; pick HH:MM 5 minutes from now)
+**Run:**
 ```bash
 # in terminal A
-bun src/index.ts run --until 22:05
+bun src/index.ts run --until +5m
+# equivalent (assuming it's currently 22:00):
+# bun src/index.ts run --until 22:05
 ```
 
 **Expected output (in terminal A — orchestrator foreground):**
@@ -176,7 +178,7 @@ You should see claude running inside the zellij tab, working on hello.py. Detach
 
 ```bash
 # window 1 — terminal A
-bun src/index.ts run --until 22:05    # short window so we hit wind-down
+bun src/index.ts run --until +5m    # short window so we hit wind-down
 ```
 
 Wait for the wind-down. At T-2min (per default `wind_down_lead_minutes: 5`, but can be reduced via cc.yaml for testing), the orchestrator injects the wind-down prompt into the claude tab. At T-0 the window closes.
@@ -200,7 +202,7 @@ bun src/index.ts status
 
 **Run window 2 (after window 1 has fully cleaned up):**
 ```bash
-bun src/index.ts run --until 22:15
+bun src/index.ts run --until +15m
 ```
 
 **Expected log lines:**

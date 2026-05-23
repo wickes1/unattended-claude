@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { SimClock } from "../src/clock.ts"
 import {
   parseRunArgs,
+  parseUntil,
   deriveWindowEnd,
   loadTaskDocs,
   makeBuildPromptFile,
@@ -45,6 +46,87 @@ describe("parseRunArgs", () => {
   })
 })
 
+describe("parseUntil", () => {
+  it("HH:MM resolves to today at that wall-clock when later than now", () => {
+    const now = new Date()
+    now.setHours(10, 0, 0, 0)
+    const end = parseUntil("23:00", now)
+    expect(end.getHours()).toBe(23)
+    expect(end.getMinutes()).toBe(0)
+    expect(end.getDate()).toBe(now.getDate())
+    expect(end.getTime()).toBeGreaterThan(now.getTime())
+  })
+
+  it("HH:MM rolls to tomorrow when earlier than now", () => {
+    const now = new Date()
+    now.setHours(23, 0, 0, 0)
+    const end = parseUntil("06:30", now)
+    expect(end.getHours()).toBe(6)
+    expect(end.getMinutes()).toBe(30)
+    expect(end.getTime()).toBeGreaterThan(now.getTime())
+  })
+
+  it("+5m returns now + 5 minutes", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    const end = parseUntil("+5m", now)
+    expect(end.toISOString()).toBe("2026-05-23T10:05:00.000Z")
+  })
+
+  it("+2h returns now + 2 hours", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    const end = parseUntil("+2h", now)
+    expect(end.toISOString()).toBe("2026-05-23T12:00:00.000Z")
+  })
+
+  it("+1m (minimum) is accepted", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    const end = parseUntil("+1m", now)
+    expect(end.toISOString()).toBe("2026-05-23T10:01:00.000Z")
+  })
+
+  it("+0m is rejected (N must be >= 1)", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    expect(() => parseUntil("+0m", now)).toThrow(
+      "Invalid --until value: '+0m'. Use HH:MM, +Nm, or +Nh.",
+    )
+  })
+
+  it("+0h is rejected (N must be >= 1)", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    expect(() => parseUntil("+0h", now)).toThrow(
+      "Invalid --until value: '+0h'. Use HH:MM, +Nm, or +Nh.",
+    )
+  })
+
+  it("+abc is rejected with clear error", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    expect(() => parseUntil("+abc", now)).toThrow(
+      "Invalid --until value: '+abc'. Use HH:MM, +Nm, or +Nh.",
+    )
+  })
+
+  it("+5s (unsupported unit) is rejected", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    expect(() => parseUntil("+5s", now)).toThrow(
+      "Invalid --until value: '+5s'. Use HH:MM, +Nm, or +Nh.",
+    )
+  })
+
+  it("garbage string is rejected", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    expect(() => parseUntil("not-a-time", now)).toThrow(
+      "Invalid --until value: 'not-a-time'. Use HH:MM, +Nm, or +Nh.",
+    )
+  })
+
+  it("empty string is rejected", () => {
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    expect(() => parseUntil("", now)).toThrow(
+      "Invalid --until value: ''. Use HH:MM, +Nm, or +Nh.",
+    )
+  })
+})
+
 describe("deriveWindowEnd", () => {
   it("returns null when no active schedule window and no --until", () => {
     const cfg = testConfig({ schedule: { windows: [] } })
@@ -74,6 +156,22 @@ describe("deriveWindowEnd", () => {
     expect(end!.getHours()).toBe(6)
     expect(end!.getMinutes()).toBe(30)
     expect(end!.getTime()).toBeGreaterThan(now.getTime())
+  })
+
+  it("accepts +Nm shorthand and returns now + N minutes", () => {
+    const cfg = testConfig()
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    const end = deriveWindowEnd(cfg, "+15m", now)
+    expect(end).not.toBeNull()
+    expect(end!.toISOString()).toBe("2026-05-23T10:15:00.000Z")
+  })
+
+  it("accepts +Nh shorthand and returns now + N hours", () => {
+    const cfg = testConfig()
+    const now = new Date("2026-05-23T10:00:00.000Z")
+    const end = deriveWindowEnd(cfg, "+3h", now)
+    expect(end).not.toBeNull()
+    expect(end!.toISOString()).toBe("2026-05-23T13:00:00.000Z")
   })
 
   it("returns windowEnd when an active schedule window covers now", () => {

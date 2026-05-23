@@ -14,10 +14,12 @@ import { activeWindow, windowEndsAt, parseHHMM } from "../schedule.ts"
 import { InteractiveZellijRuntime } from "../runtime/claude-session.ts"
 import type { Clock, Logger, PausedReason, TaskDoc, TaskRuntimeState } from "../types.ts"
 
-export const helpText = `Usage: ucl run [--until HH:MM] [--force]
+export const helpText = `Usage: ucl run [--until <time>] [--force]
 
 Start the unattended worker.
-  --until HH:MM    end the run window at this time (otherwise: until queue empty)
+  --until <time>   end the run window at this time (otherwise: until queue empty)
+                   accepts HH:MM (24h clock), +Nm (N minutes from now),
+                   or +Nh (N hours from now); HH:MM rolls to tomorrow if past
                    if omitted, derived from active schedule window in config
   --force          bypass preflight (weekly-paused / lockfile alive checks)
 
@@ -44,15 +46,38 @@ export function parseRunArgs(argv: string[]): RunArgs {
   return { until, force }
 }
 
-/** Compute the window end Date from CLI flag or active schedule. Returns null = unbounded. */
-export function deriveWindowEnd(cfg: Config, argUntil: string | null, now: Date): Date | null {
-  if (argUntil) {
-    const { h, m } = parseHHMM(argUntil)
+/**
+ * Resolve an `--until` flag value to an absolute Date.
+ *
+ * Accepts:
+ *   - `HH:MM` (24h clock) → today at that wall-clock time; rolls to tomorrow if past
+ *   - `+Nm`  (N integer ≥ 1) → `now + N minutes`
+ *   - `+Nh`  (N integer ≥ 1) → `now + N hours`
+ *
+ * Throws a clear error for anything else.
+ */
+export function parseUntil(input: string, now: Date): Date {
+  const rel = /^\+(\d+)([mh])$/.exec(input)
+  if (rel) {
+    const n = Number(rel[1])
+    const unit = rel[2]
+    if (n >= 1) {
+      const ms = unit === "h" ? n * 3600 * 1000 : n * 60 * 1000
+      return new Date(now.getTime() + ms)
+    }
+  } else if (/^\d{1,2}:\d{2}$/.test(input)) {
+    const { h, m } = parseHHMM(input)
     const end = new Date(now)
     end.setHours(h, m, 0, 0)
     if (end.getTime() <= now.getTime()) end.setDate(end.getDate() + 1)
     return end
   }
+  throw new Error(`Invalid --until value: '${input}'. Use HH:MM, +Nm, or +Nh.`)
+}
+
+/** Compute the window end Date from CLI flag or active schedule. Returns null = unbounded. */
+export function deriveWindowEnd(cfg: Config, argUntil: string | null, now: Date): Date | null {
+  if (argUntil) return parseUntil(argUntil, now)
   const window = activeWindow(cfg, now)
   if (window) return windowEndsAt(window, now)
   return null
