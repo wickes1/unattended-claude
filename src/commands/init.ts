@@ -1,5 +1,5 @@
 /** `ucl init` — interactive setup wizard. */
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { createInterface, type Interface } from "node:readline"
@@ -76,6 +76,12 @@ export async function cmdInit(opts: {
   templatePath?: string
   configPath?: string
   runtimeDir?: string
+  /**
+   * Test-only escape hatch: skip the interactive bin prompt and force a value.
+   * Bypasses the `claudeOK || happyOK` availability guard, so a runtime warning
+   * is logged if the forced bin isn't actually installed — surfaces hints in
+   * test failures without throwing.
+   */
   forceBin?: "claude" | "happy"
   toolCheck?: (cmd: string) => boolean
   /** Test override: a fake `rl` skips construction of node:readline. */
@@ -115,21 +121,24 @@ export async function cmdInit(opts: {
 
   // 4. Set up the asker. If neither bin is present we'll throw before any prompt,
   //    so build the readline interface lazily only when we know we'll need it.
+  //    The asker function is built ONCE on first use and cached — no per-prompt
+  //    allocation, no `as Interface` cast in the hot path.
   let rl: RlLike | undefined = opts.rl
   let ownRl = false
-  const ensureRl = (): RlLike => {
-    if (rl) return rl
-    const real = createInterface({ input: procStdin, output: procStdout })
-    rl = real
-    ownRl = true
-    return real
-  }
-  const askProd = (real: Interface): ((q: string) => Promise<string>) => makeAsker(real)
+  let cachedAsk: ((q: string) => Promise<string>) | undefined
   const ask = (q: string): Promise<string> => {
-    const r = ensureRl()
-    // If we own the real readline, use the async-iter asker; otherwise fake's question/cb.
-    if (ownRl) return askProd(r as Interface)(q)
-    return askVia(r)(q)
+    if (!cachedAsk) {
+      if (rl) {
+        // Fake `rl` supplied by tests — use the callback form.
+        cachedAsk = askVia(rl)
+      } else {
+        const real = createInterface({ input: procStdin, output: procStdout })
+        rl = real
+        ownRl = true
+        cachedAsk = makeAsker(real)
+      }
+    }
+    return cachedAsk(q)
   }
 
   try {
@@ -137,6 +146,10 @@ export async function cmdInit(opts: {
     let chosenBin: "claude" | "happy"
     if (opts.forceBin !== undefined) {
       chosenBin = opts.forceBin
+      const forcedOK = opts.forceBin === "claude" ? claudeOK : happyOK
+      if (!forcedOK) {
+        log(`warn: forceBin='${opts.forceBin}' but '${opts.forceBin}' is not on PATH`)
+      }
     } else if (claudeOK && happyOK) {
       chosenBin = await promptBin(ask, log, defaultBin)
     } else if (claudeOK) {
@@ -200,9 +213,11 @@ export async function cmdInit(opts: {
       preflightResults = runChecks(cfg).filter(
         (r) => r.severity === "warn" || r.severity === "error",
       )
-    } catch {
-      // If loadConfig somehow fails right after we wrote a valid YAML, skip
-      // the preflight rather than masking the original init success.
+    } catch (err) {
+      // If loadConfig somehow fails right after we wrote a valid YAML, skip the
+      // preflight rather than masking the original init success — but surface
+      // a note so the user knows checks didn't run.
+      log(`(preflight skipped: ${String(err)})`)
     }
 
     // 10. Print summary + next steps.
