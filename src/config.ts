@@ -33,6 +33,15 @@ export interface Config {
     parseFailFallbackMs: number
   }
   archive: { autoAfterDays: number }
+  /**
+   * Subscription plan accounting. `weeklyTokenCap` is the user's best estimate
+   * of how many input+output tokens their Claude subscription allows per
+   * 7-day rolling window. Used only by `ucl stats` to render a utilization
+   * percentage. 0 / missing = unset; stats prints `n/a` in that case.
+   * Anthropic does not publish a stable per-plan token number, so this must
+   * be tuned per user.
+   */
+  subscription: { weeklyTokenCap: number }
   schedule: { windows: ScheduleWindow[] }
   terminal: {
     term: string
@@ -111,6 +120,9 @@ export function loadConfig(configPath: string): Config {
     },
     archive: {
       autoAfterDays: raw.archive?.auto_after_days ?? 7,
+    },
+    subscription: {
+      weeklyTokenCap: Number(raw.subscription?.weekly_token_cap ?? 0) || 0,
     },
     schedule: {
       windows: (raw.schedule?.windows ?? []) as ScheduleWindow[],

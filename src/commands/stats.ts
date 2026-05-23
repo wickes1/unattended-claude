@@ -58,6 +58,14 @@ export interface StatsSummary {
    * of truth, so a fallback usually means very old runs or a brand-new install.
    */
   fellBackToJsonlScan: boolean
+  /**
+   * Subscription utilization for the rolling 7-day window (independent of the
+   * `--days` argument — utilization is intrinsically weekly).
+   *   - `null` when `subscription.weekly_token_cap` is 0 / missing → CLI prints `n/a`.
+   *   - Otherwise: (tokens last 7d) / cap * 100, clamped to [0, 200] so overage
+   *     is visible but pathological event timestamps can't render absurd numbers.
+   */
+  utilizationPct: number | null
 }
 
 // findClaudeSessionFile + sumTokensFromJsonl moved to src/usage.ts so the
@@ -80,6 +88,7 @@ export function buildStats(
   claudeProjectsDir: string,
   days: number,
   now: Date,
+  weeklyTokenCap: number = 0,
 ): StatsSummary {
   const events = readEvents(layout)
   const store = new TaskStateStore(layout, new RealClock())
@@ -143,7 +152,32 @@ export function buildStats(
     totalTasksDone += d.tasksDone
     totalTasksFailed += d.tasksFailed
   }
-  return { perDay, totalTokens, totalTasksDone, totalTasksFailed, fellBackToJsonlScan }
+
+  // Subscription utilization is intrinsically a rolling 7-day metric. Compute
+  // it from usage_snapshot events in the last 7d regardless of `days`. If the
+  // jsonl-fallback path was taken we approximate using totalTokens scaled by
+  // 7/days (or just totalTokens when days <= 7) so the user sees something
+  // meaningful instead of a spurious zero.
+  let utilizationPct: number | null = null
+  if (weeklyTokenCap > 0) {
+    let weeklyTokens = 0
+    if (!fellBackToJsonlScan) {
+      const sevenDayCutoff = now.getTime() - 7 * 24 * 3600_000
+      for (const e of events) {
+        if (e.event !== "usage_snapshot") continue
+        if (new Date(e.ts).getTime() < sevenDayCutoff) continue
+        weeklyTokens += e.tokens_used
+      }
+    } else {
+      // Fallback path's totalTokens is keyed by per-task last_updated within
+      // the `days` window. Best we can do without the per-episode events.
+      weeklyTokens = days <= 7 ? totalTokens : Math.round(totalTokens * (7 / days))
+    }
+    const pct = (weeklyTokens / weeklyTokenCap) * 100
+    utilizationPct = Math.max(0, Math.min(200, pct))
+  }
+
+  return { perDay, totalTokens, totalTasksDone, totalTasksFailed, fellBackToJsonlScan, utilizationPct }
 }
 
 /** Render as a text table per DESIGN §十二 example. */
@@ -159,13 +193,18 @@ export function renderStats(summary: StatsSummary): string {
   }
   lines.push("")
   lines.push(`Totals: done=${summary.totalTasksDone}  failed=${summary.totalTasksFailed}  tokens=${summary.totalTokens.toLocaleString()}`)
+  if (summary.utilizationPct === null) {
+    lines.push("Subscription utilization: n/a (set subscription.weekly_token_cap to enable)")
+  } else {
+    lines.push(`Subscription utilization: ${summary.utilizationPct.toFixed(0)}% (weekly)`)
+  }
   return lines.join("\n")
 }
 
 export async function cmdStats(cfg: Config, argv: string[], log: (s: string) => void = console.log): Promise<void> {
   const args = parseStatsArgs(argv)
   const layout = new Layout(cfg.runtimeDir)
-  const summary = buildStats(layout, args.claudeProjectsDir, args.days, new Date())
+  const summary = buildStats(layout, args.claudeProjectsDir, args.days, new Date(), cfg.subscription.weeklyTokenCap)
   if (summary.fellBackToJsonlScan) {
     log("(no usage_snapshot events found, falling back to jsonl scan)")
   }
