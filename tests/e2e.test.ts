@@ -88,7 +88,7 @@ describe("e2e milestone — paused (rate-limit) → resumed → done → archive
       clock,
       runtime: runtime1,
       loadTaskDocs: () => loadTaskDocs(layout),
-      buildPromptFile: makeBuildPromptFile(pb, promptsDir),
+      buildPromptFile: makeBuildPromptFile(pb, promptsDir, layout, clock, log),
       buildWakeUpPrompt: makeBuildWakeUpPrompt(pb),
       installSignals: () => {}, // bypass real signal handlers
     }

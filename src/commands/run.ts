@@ -5,13 +5,14 @@ import type { Config } from "../config.ts"
 import { Layout } from "../layout.ts"
 import { ConsoleLogger } from "../logger.ts"
 import { RealClock } from "../clock.ts"
+import { appendEvent } from "../events.ts"
 import { WeeklyLimitGate } from "../orchestrator/rate-limit.ts"
 import { isProcessAlive } from "../orchestrator/lifecycle.ts"
 import { runOrchestrator, type RunResult } from "../orchestrator/main.ts"
 import { PromptBuilder } from "../orchestrator/prompt-builder.ts"
 import { activeWindow, windowEndsAt, parseHHMM } from "../schedule.ts"
 import { InteractiveZellijRuntime } from "../runtime/claude-session.ts"
-import type { TaskDoc, PausedReason } from "../types.ts"
+import type { Clock, Logger, PausedReason, TaskDoc, TaskRuntimeState } from "../types.ts"
 
 export const helpText = `Usage: ucl run [--until HH:MM] [--force]
 
@@ -96,16 +97,50 @@ function parseFrontmatter(content: string): Record<string, unknown> {
 }
 
 /**
- * Bind a PromptBuilder to the orchestrator's `(task, episode, resume) → path`
- * callback shape. For resume=true we still write a tiny "continue" cue file
- * here — F02 will replace this branch with `pb.resumeWithHandoff(...)`.
+ * Bind a PromptBuilder to the orchestrator's
+ * `(task, episode, resume, state) → path` callback shape.
+ *
+ * Branches:
+ *   - resume=false → fresh episode, paste task doc.
+ *   - resume=true + handoff_pending + handoff file exists → resumeWithHandoff
+ *     (read HANDOFF.md, emit handoff_resumed event).
+ *   - resume=true otherwise (or handoff file missing) → plain continuation cue.
+ *
+ * The handoff_pending flag itself is cleared by applyResult after the
+ * episode finishes — that way a crash between here and runtime.invoke
+ * leaves the flag set so the retry still uses the handoff.
  */
 export function makeBuildPromptFile(
   pb: PromptBuilder,
   promptsDir: string,
-): (task: TaskDoc, episode: number, resume: boolean) => string {
-  return (task, episode, resume) => {
+  layout: Layout,
+  clock: Clock,
+  log?: Logger,
+): (task: TaskDoc, episode: number, resume: boolean, state: TaskRuntimeState) => string {
+  return (task, episode, resume, state) => {
     if (!resume) return pb.initial(task, episode).path!
+
+    if (state.handoff_pending) {
+      const handoffPath = layout.handoffFile(task.id)
+      if (existsSync(handoffPath)) {
+        const built = pb.resumeWithHandoff(task, handoffPath, episode)
+        appendEvent(layout, {
+          ts: clock.now().toISOString(),
+          event: "handoff_resumed",
+          task: task.id,
+          path: handoffPath,
+        })
+        // handoff_pending is cleared by applyResult once the episode finishes;
+        // this keeps the flag set across a crash between here and runtime.invoke
+        // so the retry still uses the handoff.
+        return built.path!
+      }
+      log?.log(
+        "warn",
+        `handoff_pending=true but ${handoffPath} is missing; falling back to plain continuation cue`,
+      )
+    }
+
     const path = join(promptsDir, `${task.id}-ep${episode}.md`)
     writeFileSync(path, `Continue from where you left off in the previous episode.\n`)
     return path
@@ -163,7 +198,7 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
       clock,
       runtime,
       loadTaskDocs: () => loadTaskDocs(layout),
-      buildPromptFile: makeBuildPromptFile(pb, promptsDir),
+      buildPromptFile: makeBuildPromptFile(pb, promptsDir, layout, clock, log),
       buildWakeUpPrompt: makeBuildWakeUpPrompt(pb),
     },
     {

@@ -17,13 +17,20 @@ export interface InvokeOpts {
   windDownAt: Date | null
   /** NEW v2: short prompt injected on resume after dialogs settle; null = no wake-up. */
   wakeUpPrompt: string | null
+  /** NEW v2 (F02): where the running session should write its HANDOFF.md
+   * when context-full is detected. Always set; runtime ignores when no
+   * context-full path is taken. */
+  handoffPath: string
+  /** NEW v2 (F02): max ms to wait for HANDOFF.md to be written after
+   * context-full is detected. */
+  handoffTimeoutMs: number
 }
 
 export type EpisodeResult =
   | { status: "completed"; durationMs: number }
   | { status: "rate_limited"; resumeAt: Date }
   | { status: "weekly_limited"; resumeAt: Date }      // NEW v2
-  | { status: "context_full" }                         // NEW v2
+  | { status: "context_full"; handoffWritten: boolean }  // NEW v2 (F02)
   | { status: "timeout" }
   | { status: "error"; reason: string }
   | { status: "lost"; reason: string }
@@ -56,6 +63,10 @@ export interface TaskRuntimeState {
   created_at: string                             // ISO 8601
   last_updated: string                           // ISO 8601
   workdir: string                                // absolute path
+  /** NEW v2 (F02): true after context-full when HANDOFF.md was written and
+   * the next episode should resume from it. Cleared by the orchestrator
+   * once the next episode commits. */
+  handoff_pending: boolean
 }
 
 // ── Task doc (parsed from tasks/<id>.md frontmatter) ───────
@@ -78,6 +89,8 @@ export type Event =
   | { ts: string; event: "rate_limit"; task: string; episode: number; resume_at: string }
   | { ts: string; event: "weekly_limit"; resume_at: string }
   | { ts: string; event: "context_compaction"; task: string; episode: number }
+  | { ts: string; event: "handoff_written"; task: string; path: string }
+  | { ts: string; event: "handoff_resumed"; task: string; path: string }
   | { ts: string; event: "wind_down_injected"; task: string; episode: number }
   | { ts: string; event: "queued_due_to_concurrency_cap"; task: string }
   | { ts: string; event: "usage_snapshot"; task: string; episode: number; session_tokens: number }

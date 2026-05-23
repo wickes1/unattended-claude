@@ -181,6 +181,7 @@ describe("findArchiveCandidates", () => {
       created_at: tenDaysAgo,
       last_updated: tenDaysAgo,
       workdir: "/tmp/w1",
+      handoff_pending: false,
     })
     seedState(layout, {
       schema_version: 1,
@@ -193,6 +194,7 @@ describe("findArchiveCandidates", () => {
       created_at: tenDaysAgo,
       last_updated: tenDaysAgo,
       workdir: "/tmp/w2",
+      handoff_pending: false,
     })
     const cands = findArchiveCandidates(layout, 7, now)
     const ids = cands.map((c) => c.task_id).sort()
@@ -218,6 +220,7 @@ describe("findArchiveCandidates", () => {
         created_at: old,
         last_updated: old,
         workdir: `/tmp/${st}`,
+        handoff_pending: false,
       })
     }
     expect(findArchiveCandidates(layout, 7, now)).toEqual([])
@@ -238,6 +241,7 @@ describe("findArchiveCandidates", () => {
       created_at: recent,
       last_updated: recent,
       workdir: "/tmp/fresh",
+      handoff_pending: false,
     })
     expect(findArchiveCandidates(layout, 7, now)).toEqual([])
   })
@@ -263,6 +267,7 @@ describe("cmdArchive", () => {
       created_at: old,
       last_updated: old,
       workdir: "/tmp/dry",
+      handoff_pending: false,
     } satisfies TaskRuntimeState, null, 2))
     writeFileSync(layout.taskDocFile(id), "# dry\n")
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { SimClock } from "../src/clock.ts"
 import {
   parseRunArgs,
   deriveWindowEnd,
@@ -11,7 +12,7 @@ import {
 } from "../src/commands/run.ts"
 import { Layout } from "../src/layout.ts"
 import { PromptBuilder } from "../src/orchestrator/prompt-builder.ts"
-import type { TaskDoc } from "../src/types.ts"
+import type { TaskDoc, TaskRuntimeState } from "../src/types.ts"
 import { testConfig } from "./helpers.ts"
 
 function freshLayout(): Layout {
@@ -169,36 +170,56 @@ describe("makeBuildPromptFile (PromptBuilder binding)", () => {
     }
   }
 
-  function build(): {
-    fn: (t: TaskDoc, e: number, r: boolean) => string
+  function build(layout: Layout): {
+    fn: (t: TaskDoc, e: number, r: boolean, s: TaskRuntimeState) => string
     promptsDir: string
   } {
     const promptsDir = mkdtempSync(join(tmpdir(), "ucl-prompt-"))
     const pb = new PromptBuilder({ promptsDir })
-    return { fn: makeBuildPromptFile(pb, promptsDir), promptsDir }
+    const clock = new SimClock(new Date("2026-05-23T22:30:00.000Z"))
+    return {
+      fn: makeBuildPromptFile(pb, promptsDir, layout, clock),
+      promptsDir,
+    }
+  }
+
+  function blankState(taskId: string, workdir: string): TaskRuntimeState {
+    return {
+      schema_version: 1,
+      task_id: taskId,
+      state: "running",
+      paused_reason: null,
+      claude_session_id: "00000000-0000-0000-0000-000000000001",
+      current_episode: 0,
+      context_compactions: 0,
+      created_at: "2026-05-23T22:30:00.000Z",
+      last_updated: "2026-05-23T22:30:00.000Z",
+      workdir,
+      handoff_pending: false,
+    }
   }
 
   it("writes task content for fresh episode (resume=false)", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
-    const { fn } = build()
-    const path = fn(task, 1, false)
+    const { fn } = build(layout)
+    const path = fn(task, 1, false, blankState(task.id, task.workdir))
     expect(readFileSync(path, "utf8")).toBe("# Task body content here\n")
   })
 
   it("writes wake-up continuation cue for resume=true", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
-    const { fn } = build()
-    const path = fn(task, 2, true)
+    const { fn } = build(layout)
+    const path = fn(task, 2, true, blankState(task.id, task.workdir))
     expect(readFileSync(path, "utf8")).toContain("Continue from where you left off")
   })
 
   it("path filename includes task id + episode", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
-    const { fn } = build()
-    const path = fn(task, 3, false)
+    const { fn } = build(layout)
+    const path = fn(task, 3, false, blankState(task.id, task.workdir))
     expect(path).toContain(task.id)
     expect(path).toContain("ep3")
   })

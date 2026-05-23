@@ -83,6 +83,8 @@ function makeOpts(over: Partial<InvokeOpts> = {}): InvokeOpts {
     resume: false,
     windDownAt: null,
     wakeUpPrompt: null,
+    handoffPath: "/tmp/handoff.md",
+    handoffTimeoutMs: 120_000,
     ...over,
   }
 }
@@ -125,8 +127,17 @@ describe("pollUntilDone — detection priorities", () => {
     const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
     const log = new MemoryLogger()
     const cfg = testConfig()
-    const result = await pollUntilDone(makeOpts(), cfg, log, clock, z)
-    expect(result).toEqual({ status: "context_full" })
+    // Tiny handoffTimeoutMs so the context-full write path falls through
+    // quickly without producing the file or READY. Status flag is the
+    // contract here; handoff details are exercised in tests/handoff.test.ts.
+    const result = await pollUntilDone(
+      makeOpts({ handoffTimeoutMs: 50 }),
+      cfg,
+      log,
+      clock,
+      z,
+    )
+    expect(result.status).toBe("context_full")
   })
 
   test("weekly limit beats rate limit when both phrases present", async () => {

@@ -70,7 +70,7 @@ function makeTask(s: Setup, id: string, opts: { workdir?: string; serial?: boole
 
 /** Build a stub `buildPromptFile` that writes a tiny prompt file per call. */
 function promptFn(s: Setup) {
-  return (task: TaskDoc, episode: number, _resume: boolean): string => {
+  return (task: TaskDoc, episode: number, _resume: boolean, _state: import("../src/types.ts").TaskRuntimeState): string => {
     const p = join(s.dir, `prompt-${task.id}-${episode}.md`)
     writeFileSync(p, `# ${task.id} episode ${episode}\n`)
     return p
