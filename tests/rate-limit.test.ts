@@ -93,6 +93,50 @@ describe("RateLimitGate", () => {
     expect(gate.resumeAt).toBeNull()
     expect(gate.blockedAt(clock.now())).toBe(false)
   })
+
+  // ── safetyMarginMs (F04) ──────────────────────────────────────────
+  // The gate pads each parsed resume time so lanes wake AFTER the limit
+  // actually lifts. Anthropic resets at 14:00:00 + margin 30s → 14:00:30.
+
+  test("trip with safetyMarginMs adds the margin to resumeAt", () => {
+    const gate = new RateLimitGate(30_000) // 30s margin
+    const raw = new Date("2026-05-21T14:00:00.000Z")
+    gate.trip(raw)
+    expect(gate.resumeAt!.getTime()).toBe(raw.getTime() + 30_000)
+  })
+
+  test("blockedAt is still true at the raw resume time when margin > 0", () => {
+    const gate = new RateLimitGate(30_000)
+    const raw = new Date("2026-05-21T14:00:00.000Z")
+    gate.trip(raw)
+    // Exactly at the raw reset time, we should still be blocked because
+    // the gate stored resumeAt = raw + 30s.
+    expect(gate.blockedAt(raw)).toBe(true)
+    // 30s later — exactly at the padded resumeAt — no longer blocked.
+    const after = new Date(raw.getTime() + 30_000)
+    expect(gate.blockedAt(after)).toBe(false)
+  })
+
+  test("default constructor (no margin) behaves identically to before (margin=0)", () => {
+    const gate = new RateLimitGate()
+    const raw = new Date("2026-05-21T14:00:00.000Z")
+    gate.trip(raw)
+    expect(gate.resumeAt!.getTime()).toBe(raw.getTime())
+  })
+
+  test("multiple trips: each candidate is padded, gate keeps the later padded value", () => {
+    const gate = new RateLimitGate(60_000) // 1m margin
+    const first = new Date("2026-05-21T14:00:00.000Z")
+    const second = new Date("2026-05-21T14:30:00.000Z")
+    gate.trip(first) // padded → 14:01:00
+    gate.trip(second) // padded → 14:31:00, later → wins
+    expect(gate.resumeAt!.getTime()).toBe(second.getTime() + 60_000)
+
+    // A subsequent earlier trip is ignored even after padding.
+    const earlier = new Date("2026-05-21T14:05:00.000Z") // padded → 14:06:00
+    gate.trip(earlier)
+    expect(gate.resumeAt!.getTime()).toBe(second.getTime() + 60_000)
+  })
 })
 
 // ── WeeklyLimitGate ──────────────────────────────────────────────

@@ -25,8 +25,6 @@ export interface Config {
     episodeHardTimeoutMs: number
     inactivityTimeoutMs: number
     captureLines: number
-    cooldownMs: number
-    maxConsecutiveErrors: number
   }
   detection: {
     dialogPollIntervalMs: number
@@ -106,8 +104,6 @@ export function loadConfig(configPath: string): Config {
       episodeHardTimeoutMs: parseDuration(raw.execution?.episode_hard_timeout ?? "60m"),
       inactivityTimeoutMs: parseDuration(raw.execution?.inactivity_timeout ?? "30s"),
       captureLines: raw.execution?.capture_lines ?? 3000,
-      cooldownMs: parseDuration(raw.execution?.cooldown ?? "0s"),
-      maxConsecutiveErrors: raw.execution?.max_consecutive_errors ?? 5,
     },
     detection: {
       dialogPollIntervalMs: parseDuration(raw.detection?.dialog_poll_interval ?? "500ms"),

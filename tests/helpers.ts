@@ -18,8 +18,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
       episodeHardTimeoutMs: 60 * 60_000,
       inactivityTimeoutMs: 30_000,
       captureLines: 3000,
-      cooldownMs: 0,
-      maxConsecutiveErrors: 5,
     },
     detection: { dialogPollIntervalMs: 500, dialogTimeoutMs: 30_000 },
     rateLimit: { safetyMarginMs: 30_000, parseFailFallbackMs: 60 * 60_000 },

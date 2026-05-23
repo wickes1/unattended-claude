@@ -44,6 +44,14 @@ describe("loadConfig", () => {
     expect(cfg.schedule.windows.length).toBe(0)
   })
 
+  // F04: cooldown + max_consecutive_errors were dead knobs; deleted from the
+  // schema. Assert they do not leak back in.
+  it("does not expose deleted execution knobs (cooldownMs, maxConsecutiveErrors)", () => {
+    const cfg = loadConfig(join(import.meta.dir, "..", "config", "cc.yaml"))
+    expect((cfg.execution as Record<string, unknown>).cooldownMs).toBeUndefined()
+    expect((cfg.execution as Record<string, unknown>).maxConsecutiveErrors).toBeUndefined()
+  })
+
   it("throws when paths.runtime_dir is missing", () => {
     const dir = mkdtempSync(join(tmpdir(), "ucl-cfg-"))
     const p = join(dir, "bad.yaml")

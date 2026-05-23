@@ -176,7 +176,7 @@ export async function runOrchestrator(
   }
 
   // 9. Episode context (shared by all lanes)
-  const rateLimitGate = new RateLimitGate()
+  const rateLimitGate = new RateLimitGate(deps.cfg.rateLimit.safetyMarginMs)
   const epCtx: EpisodeCtx = {
     runtime: deps.runtime,
     layout: deps.layout,
@@ -189,6 +189,7 @@ export async function runOrchestrator(
     windDownLeadMs: deps.cfg.execution.windDownLeadMinutes * 60_000,
     parentSession: opts.parentSession,
     contextCompactThreshold: deps.cfg.execution.contextCompactThreshold,
+    episodeHardTimeoutMs: deps.cfg.execution.episodeHardTimeoutMs,
   }
 
   // 10. Lane decomposition: group by workdir (or per-id for serial tasks).

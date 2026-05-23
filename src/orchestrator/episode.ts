@@ -39,6 +39,8 @@ export interface EpisodeCtx {
   parentSession: string
   /** Token-equivalent threshold for forcing context-full path. */
   contextCompactThreshold: number
+  /** Hard per-episode timeout in ms (cfg.execution.episodeHardTimeoutMs). */
+  episodeHardTimeoutMs: number
 }
 
 /** Build InvokeOpts for the next episode of a task. */
@@ -58,7 +60,7 @@ export function buildInvokeOpts(
     workdir: state.workdir,
     promptFile,
     sentinelFile,
-    timeoutMs: 60 * 60 * 1000, // 60m hard ceiling per episode; orchestrator may shorten
+    timeoutMs: ctx.episodeHardTimeoutMs,
     parentSession: ctx.parentSession,
     tabName: task.id,
     rawLogFile,
