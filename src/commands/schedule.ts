@@ -1,11 +1,11 @@
 import { readdirSync, unlinkSync, writeFileSync } from "node:fs"
+import { basename, join } from "node:path"
 import { homedir } from "node:os"
-import { join } from "node:path"
 import { ensureDir } from "../fs-utils.ts"
 import type { Config, ScheduleWindow } from "../config.ts"
 import { parseHHMM } from "../schedule.ts"
 
-export const helpText = `Usage: ucl schedule <list|install|uninstall>
+export const helpText = `Usage: ucl schedule <list|install|uninstall> [--bin <path>]
 
 Manage macOS launchd entries for scheduled \`ucl run\` invocations.
 
@@ -14,8 +14,52 @@ Manage macOS launchd entries for scheduled \`ucl run\` invocations.
               and launchctl-load them
   uninstall   launchctl-unload and remove all unattended-claude plists
 
+Options for install:
+  --bin <path>  Override the binary path written into ProgramArguments.
+                Useful when installing from a build dir but the binary will
+                live elsewhere (e.g. /opt/local/bin/ucl).
+
 Plists go in ~/Library/LaunchAgents/ with labels dev.unattended-claude.<start>-<end>.plist
 `
+
+/** Names we recognize as our compiled-binary artifact (case-insensitive). */
+const COMPILED_BIN_NAMES = new Set(["ucl", "unattended-claude"])
+
+/**
+ * Resolve the ProgramArguments *prefix* (everything before `run --until <end>`)
+ * for the launchd plist, by inspecting how the current process was invoked.
+ *
+ * - `binOverride` (e.g. from `--bin /opt/local/bin/ucl`) always wins: emits `[binOverride]`.
+ * - Compiled binary mode (`execPath` basename matches "ucl" or "unattended-claude"):
+ *   emits `[execPath]`.
+ * - Source mode (Bun interpreter + script path in argv[1]):
+ *   emits `[execPath, scriptPath]`.
+ *
+ * If we can't detect compiled mode and `argv[1]` is missing, throw — silently
+ * writing a plist that launchd will fail to execute is worse than a clear error.
+ */
+export function resolveProgramPrefix(opts: {
+  execPath?: string
+  argv?: string[]
+  binOverride?: string
+} = {}): string[] {
+  if (opts.binOverride) return [opts.binOverride]
+  const execPath = opts.execPath ?? process.execPath
+  const argv = opts.argv ?? process.argv
+  const exeBase = basename(execPath).toLowerCase()
+  if (COMPILED_BIN_NAMES.has(exeBase)) return [execPath]
+  // Source mode (bun + script) — need argv[1] as the script path.
+  const script = argv[1]
+  if (!script) {
+    throw new Error(
+      `schedule install: cannot determine script path. ` +
+      `execPath=${execPath} is not a recognized compiled binary (expected one of: ` +
+      `${[...COMPILED_BIN_NAMES].join(", ")}) and argv[1] is missing. ` +
+      `Pass --bin <path> to override.`,
+    )
+  }
+  return [execPath, script]
+}
 
 const DAY_TO_LAUNCHD_WEEKDAY: Record<string, number> = {
   // launchd Weekday: 0=Sunday … 6=Saturday (per Apple docs; some sources say 1-7, but 0=Sun works)
@@ -32,10 +76,17 @@ export function plistFilename(window: ScheduleWindow): string {
 
 /**
  * Generate a launchd plist XML for one schedule window.
- * The plist runs `<exePath> run --until <window.end>` at the window's start time
- * on each active day.
+ *
+ * `programPrefix` is the list of arg-strings that come BEFORE `run --until <end>`
+ * in the plist's ProgramArguments. For a compiled binary that's `[ucl]`; for
+ * source mode that's `[bun, /path/to/src/index.ts]`. A bare string is accepted
+ * for back-compat (treated as a single-element prefix).
  */
-export function generatePlist(window: ScheduleWindow, exePath: string, runtimeDir: string): string {
+export function generatePlist(
+  window: ScheduleWindow,
+  programPrefix: string | string[],
+  runtimeDir: string,
+): string {
   const { h, m } = parseHHMM(window.start)
   const intervals = window.days
     .map((d) => DAY_TO_LAUNCHD_WEEKDAY[d.toLowerCase()])
@@ -47,6 +98,11 @@ export function generatePlist(window: ScheduleWindow, exePath: string, runtimeDi
     </dict>`)
     .join("\n")
 
+  const prefix = Array.isArray(programPrefix) ? programPrefix : [programPrefix]
+  const programArgs = [...prefix, "run", "--until", window.end]
+    .map((s) => `    <string>${s}</string>`)
+    .join("\n")
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -55,10 +111,7 @@ export function generatePlist(window: ScheduleWindow, exePath: string, runtimeDi
   <string>${plistLabel(window)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${exePath}</string>
-    <string>run</string>
-    <string>--until</string>
-    <string>${window.end}</string>
+${programArgs}
   </array>
   <key>StartCalendarInterval</key>
   <array>
@@ -96,17 +149,47 @@ export const defaultOps: ScheduleOps = {
   },
 }
 
+/** Extract `--bin <path>` from argv, returning the value (or undefined) plus argv with the flag removed. */
+function takeBinFlag(argv: string[]): { binOverride: string | undefined; rest: string[] } {
+  const out: string[] = []
+  let binOverride: string | undefined
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--bin" && argv[i + 1]) {
+      binOverride = argv[i + 1]
+      i++
+      continue
+    }
+    out.push(argv[i]!)
+  }
+  return { binOverride, rest: out }
+}
+
 /** Sub-command dispatch. */
 export async function cmdSchedule(
   cfg: Config,
   argv: string[],
   log: (s: string) => void = console.log,
   ops: ScheduleOps = defaultOps,
-  exePath: string = process.argv[1] ?? "ucl",
+  /**
+   * ProgramArguments prefix to write into the plist. Accepts:
+   *   - a `string[]` (preferred): the full prefix, e.g. `["/usr/local/bin/ucl"]` or `["/usr/local/bin/bun", "/Users/.../src/index.ts"]`
+   *   - a `string` (back-compat with older callers/tests): treated as a single-element prefix
+   *   - omitted: auto-detected via `resolveProgramPrefix()` from process state
+   * A `--bin <path>` flag in `argv` overrides this.
+   */
+  programPrefix?: string | string[],
 ): Promise<void> {
-  const sub = argv[0]
+  const { binOverride, rest } = takeBinFlag(argv)
+  const sub = rest[0]
   if (sub === "list") return cmdScheduleList(cfg, log, ops)
-  if (sub === "install") return cmdScheduleInstall(cfg, log, ops, exePath)
+  if (sub === "install") {
+    const prefix = binOverride
+      ? [binOverride]
+      : programPrefix !== undefined
+        ? (Array.isArray(programPrefix) ? programPrefix : [programPrefix])
+        : resolveProgramPrefix()
+    return cmdScheduleInstall(cfg, log, ops, prefix)
+  }
   if (sub === "uninstall") return cmdScheduleUninstall(log, ops)
   log(helpText)
 }
@@ -128,11 +211,11 @@ function cmdScheduleList(cfg: Config, log: (s: string) => void, ops: ScheduleOps
   else for (const f of installed) log(`  ${f}`)
 }
 
-function cmdScheduleInstall(cfg: Config, log: (s: string) => void, ops: ScheduleOps, exePath: string): void {
+function cmdScheduleInstall(cfg: Config, log: (s: string) => void, ops: ScheduleOps, programPrefix: string[]): void {
   ensureDir(ops.launchAgentsDir)
   for (const w of cfg.schedule.windows) {
     const path = join(ops.launchAgentsDir, plistFilename(w))
-    writeFileSync(path, generatePlist(w, exePath, cfg.runtimeDir))
+    writeFileSync(path, generatePlist(w, programPrefix, cfg.runtimeDir))
     const ok = ops.launchctlLoad(path)
     log(`${ok ? "loaded" : "wrote (load failed)"}  ${path}`)
   }
