@@ -14,7 +14,6 @@ export interface Config {
   configPath: string
   runtimeDir: string
   runtime: {
-    driver: string
     bin: string
     extraArgs: string[]
   }
@@ -93,7 +92,6 @@ export function loadConfig(configPath: string): Config {
     configPath: absConfig,
     runtimeDir,
     runtime: {
-      driver: raw.runtime?.driver ?? "claude",
       bin: raw.runtime?.bin ?? "happy",
       extraArgs: raw.runtime?.extra_args ?? [],
     },

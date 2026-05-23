@@ -111,7 +111,7 @@ describe("buildLaunchCommand", () => {
 
   test("bin=claude first launch: --session-id <uuid> + extra args", () => {
     const cfg = testConfig({
-      runtime: { driver: "claude", bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
+      runtime: { bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
     })
     const opts = makeOpts({ claudeSessionId: "uuid-1", resume: false })
     expect(buildLaunchCommand(cfg, opts)).toBe(
@@ -121,7 +121,7 @@ describe("buildLaunchCommand", () => {
 
   test("bin=claude resume: --resume <uuid> + extra args", () => {
     const cfg = testConfig({
-      runtime: { driver: "claude", bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
+      runtime: { bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
     })
     const opts = makeOpts({ claudeSessionId: "uuid-1", resume: true })
     expect(buildLaunchCommand(cfg, opts)).toBe(
@@ -131,7 +131,7 @@ describe("buildLaunchCommand", () => {
 
   test("empty extraArgs (bin=claude): just bin + session flag", () => {
     const cfg = testConfig({
-      runtime: { driver: "claude", bin: "claude", extraArgs: [] },
+      runtime: { bin: "claude", extraArgs: [] },
     })
     const opts = makeOpts({ claudeSessionId: "uuid-1", resume: false })
     expect(buildLaunchCommand(cfg, opts)).toBe("claude --session-id uuid-1")
@@ -139,7 +139,7 @@ describe("buildLaunchCommand", () => {
 
   test("empty extraArgs (bin=happy first launch): just bin", () => {
     const cfg = testConfig({
-      runtime: { driver: "claude", bin: "happy", extraArgs: [] },
+      runtime: { bin: "happy", extraArgs: [] },
     })
     const opts = makeOpts({ claudeSessionId: "abc-123", resume: false })
     expect(buildLaunchCommand(cfg, opts)).toBe("happy")
@@ -568,7 +568,7 @@ describe("runClaudeSession — resume ordering", () => {
       // happy first launch triggers /status discovery which is covered in
       // tests/claude-session-happy-mode.test.ts.
       const cfg = testConfig({
-        runtime: { driver: "claude", bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
+        runtime: { bin: "claude", extraArgs: ["--dangerously-skip-permissions"] },
       })
       const result = await runClaudeSession(
         makeOpts({

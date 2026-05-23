@@ -38,7 +38,7 @@ describe("resolvePath", () => {
 describe("loadConfig", () => {
   it("loads v2 config/ucl.yaml with expected shape", () => {
     const cfg = loadConfig(join(import.meta.dir, "..", "config", "ucl.yaml"))
-    expect(cfg.runtime.driver).toBe("claude")
+    expect(cfg.runtime.bin).toBe("happy")
     expect(cfg.execution.maxParallelTabs).toBe(3)
     expect(cfg.archive.autoAfterDays).toBe(7)
     expect(cfg.schedule.windows.length).toBe(0)
@@ -55,7 +55,7 @@ describe("loadConfig", () => {
   it("throws when paths.runtime_dir is missing", () => {
     const dir = mkdtempSync(join(tmpdir(), "ucl-cfg-"))
     const p = join(dir, "bad.yaml")
-    writeFileSync(p, "runtime:\n  driver: claude\n", "utf8")
+    writeFileSync(p, "runtime:\n  bin: happy\n", "utf8")
     try {
       expect(() => loadConfig(p)).toThrow(/paths.runtime_dir/)
     } finally {

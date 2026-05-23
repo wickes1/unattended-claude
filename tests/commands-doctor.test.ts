@@ -22,7 +22,6 @@ function mkCfg(overrides: { bin?: "claude" | "happy"; runtimeDir?: string; confi
     configPath,
     runtimeDir,
     runtime: {
-      driver: "claude",
       bin: overrides.bin ?? "claude",
       extraArgs: [],
     },
