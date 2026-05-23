@@ -281,6 +281,70 @@ describe("pollUntilDone — wind-down injection", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // F05: pollUntilDone must report wind-down injection back to applyResult so
+  // a wind_down_injected event can be appended to events.jsonl. The injection
+  // itself was already covered above; here we pin the result-side contract.
+  test("result.windDownInjected is populated when wind-down fires", async () => {
+    const start = new Date("2026-05-23T00:00:00Z")
+    const windDownAt = new Date(start.getTime() + 1500)
+    const dir = mkdtempSync(join(tmpdir(), "ucl-winddown-result-"))
+    try {
+      const sentinel = join(dir, "done")
+      const { z } = fakeZellij({
+        captureScript: (i) => {
+          if (i === 5) writeFileSync(sentinel, "done\n")
+          return "normal output\n❯ "
+        },
+      })
+      const clock = new SimClock(start)
+      const log = new MemoryLogger()
+      const result = await pollUntilDone(
+        makeOpts({ sentinelFile: sentinel, windDownAt, timeoutMs: 60_000 }),
+        testConfig(),
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("completed")
+      expect(result.windDownInjected).not.toBeNull()
+      expect(result.windDownInjected).toBeDefined()
+      // Boundary was 1500ms after start; injection lands on a tick that has
+      // SimClock at >= boundary. The lag in minutes is round((-elapsed)/60_000)
+      // — for this short test that's effectively 0.
+      expect(
+        typeof result.windDownInjected?.atMinutesBeforeBoundary,
+      ).toBe("number")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("result.windDownInjected is null when wind-down never fires", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ucl-winddown-null-result-"))
+    try {
+      const sentinel = join(dir, "done")
+      const { z } = fakeZellij({
+        captureScript: (i) => {
+          if (i === 3) writeFileSync(sentinel, "done\n")
+          return "normal output\n❯ "
+        },
+      })
+      const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
+      const log = new MemoryLogger()
+      const result = await pollUntilDone(
+        makeOpts({ sentinelFile: sentinel, windDownAt: null }),
+        testConfig(),
+        log,
+        clock,
+        z,
+      )
+      expect(result.status).toBe("completed")
+      expect(result.windDownInjected).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ── pollUntilDone — SimClock-driven timing (F03) ────────────────────

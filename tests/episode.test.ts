@@ -1,6 +1,6 @@
 /** Episode-loop tests — one per EpisodeResult status, plus helpers. */
 import { describe, expect, it } from "bun:test"
-import { existsSync, mkdtempSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SimClock } from "../src/clock.ts"
@@ -455,5 +455,168 @@ describe("runEpisode: task_started event", () => {
     expect(started).toBeDefined()
     expect((started as { episode: number }).episode).toBe(3)
     expect((started as { resumed: boolean }).resumed).toBe(true)
+  })
+})
+
+// ── F05: wind_down_injected + usage_snapshot events ──────────────────
+//
+// These events are the only observability for two operationally critical
+// behaviors: did the orchestrator inject the wind-down prompt before the
+// window ended (so the AI could stop cleanly), and how much token usage
+// did each episode burn. They're declared in the Event union but were
+// never appendEvent'd before F05 — `ucl stats` therefore had to back-fill
+// from raw claude jsonl. The tests below pin BOTH the emission contract
+// (one event per episode/wind-down) AND the data carried (tokens_used must
+// reflect the jsonl this episode wrote to). A future "fix" that drops
+// either side will break here.
+
+/** Build a fake claude jsonl under projectsDir/<encoded-cwd>/<uuid>.jsonl. */
+function writeFakeUsageJsonl(
+  projectsDir: string,
+  sessionId: string,
+  inputTokens: number,
+  outputTokens: number,
+): string {
+  const sub = join(projectsDir, "-fake-cwd")
+  mkdirSync(sub, { recursive: true })
+  const path = join(sub, `${sessionId}.jsonl`)
+  writeFileSync(
+    path,
+    JSON.stringify({ message: { usage: { input_tokens: inputTokens, output_tokens: outputTokens } } }) +
+      "\n",
+  )
+  return path
+}
+
+describe("applyResult: wind_down_injected event (F05)", () => {
+  it("emits wind_down_injected when result.windDownInjected is populated", async () => {
+    const s = setup()
+    const projects = mkdtempSync(join(tmpdir(), "ucl-projects-"))
+    writeFakeUsageJsonl(projects, SESSION_ID, 0, 0)
+    const runtime = new MockRuntime([
+      () => {
+        s.clock.advance(60_000)
+        return {
+          status: "completed",
+          durationMs: 60_000,
+          windDownInjected: { atMinutesBeforeBoundary: -2 },
+        }
+      },
+    ])
+    const ctx = makeCtx(s, runtime, { claudeProjectsDir: projects })
+
+    const result = await runEpisode(s.task, s.store.load(TASK_ID)!, ctx, s.promptFile, null)
+    await applyResult(s.task, result, ctx)
+
+    const events = readEvents(s.layout)
+    const wd = events.find((e) => e.event === "wind_down_injected")
+    expect(wd).toBeDefined()
+    expect((wd as { task: string }).task).toBe(TASK_ID)
+    expect((wd as { episode: number }).episode).toBe(1)
+    // Lag value must be carried through verbatim; if the orchestrator silently
+    // recomputed it from the wrong clock the runtime contract would drift.
+    expect((wd as { at_minutes_before_boundary: number }).at_minutes_before_boundary).toBe(-2)
+  })
+
+  it("does NOT emit wind_down_injected when result.windDownInjected is null/absent", async () => {
+    const s = setup()
+    const projects = mkdtempSync(join(tmpdir(), "ucl-projects-"))
+    writeFakeUsageJsonl(projects, SESSION_ID, 0, 0)
+    const runtime = new MockRuntime([simComplete(s.clock, { durationMin: 1 })])
+    const ctx = makeCtx(s, runtime, { claudeProjectsDir: projects })
+
+    const result = await runEpisode(s.task, s.store.load(TASK_ID)!, ctx, s.promptFile, null)
+    // simComplete returns no windDownInjected field — exactly the no-wind-down case.
+    expect((result as { windDownInjected?: unknown }).windDownInjected).toBeUndefined()
+    await applyResult(s.task, result, ctx)
+
+    const events = readEvents(s.layout)
+    expect(events.find((e) => e.event === "wind_down_injected")).toBeUndefined()
+  })
+})
+
+describe("applyResult: usage_snapshot event (F05)", () => {
+  it("emits usage_snapshot with tokens_used summed from the session's jsonl", async () => {
+    const s = setup()
+    const projects = mkdtempSync(join(tmpdir(), "ucl-projects-"))
+    const jsonlPath = writeFakeUsageJsonl(projects, SESSION_ID, 1000, 250)
+    const runtime = new MockRuntime([simComplete(s.clock, { durationMin: 1 })])
+    const ctx = makeCtx(s, runtime, { claudeProjectsDir: projects })
+
+    const result = await runEpisode(s.task, s.store.load(TASK_ID)!, ctx, s.promptFile, null)
+    await applyResult(s.task, result, ctx)
+
+    const events = readEvents(s.layout)
+    const snap = events.find((e) => e.event === "usage_snapshot")
+    expect(snap).toBeDefined()
+    expect((snap as { task: string }).task).toBe(TASK_ID)
+    expect((snap as { episode: number }).episode).toBe(1)
+    // tokens_used must reflect the actual sum (1000 + 250) — a future
+    // refactor that emits a stub value or skips the file read will break here.
+    expect((snap as { tokens_used: number }).tokens_used).toBe(1250)
+    expect((snap as { source_path: string }).source_path).toBe(jsonlPath)
+  })
+
+  it("emits usage_snapshot even on failure outcomes (timeout/error/lost)", async () => {
+    const s = setup()
+    const projects = mkdtempSync(join(tmpdir(), "ucl-projects-"))
+    writeFakeUsageJsonl(projects, SESSION_ID, 100, 50)
+    // Timeout still wrote tokens before dying — stats should reflect them.
+    const runtime = new MockRuntime([simTimeout(s.clock, 1)])
+    const ctx = makeCtx(s, runtime, { claudeProjectsDir: projects })
+
+    const result = await runEpisode(s.task, s.store.load(TASK_ID)!, ctx, s.promptFile, null)
+    expect(result.status).toBe("timeout")
+    await applyResult(s.task, result, ctx)
+
+    const events = readEvents(s.layout)
+    const snap = events.find((e) => e.event === "usage_snapshot")
+    expect(snap).toBeDefined()
+    expect((snap as { tokens_used: number }).tokens_used).toBe(150)
+  })
+
+  it("uses discoveredSessionId for jsonl lookup when present (Happy first launch)", async () => {
+    const s = setup()
+    const projects = mkdtempSync(join(tmpdir(), "ucl-projects-"))
+    const DISCOVERED = "discovered-1234"
+    // Only the DISCOVERED jsonl has the right tokens; SESSION_ID jsonl has
+    // bogus tokens. If applyResult uses the wrong id, the assertion fails.
+    writeFakeUsageJsonl(projects, SESSION_ID, 9999, 9999)
+    writeFakeUsageJsonl(projects, DISCOVERED, 42, 8)
+    const runtime = new MockRuntime([
+      () => {
+        s.clock.advance(60_000)
+        return {
+          status: "completed",
+          durationMs: 60_000,
+          discoveredSessionId: DISCOVERED,
+        }
+      },
+    ])
+    const ctx = makeCtx(s, runtime, { claudeProjectsDir: projects })
+
+    const result = await runEpisode(s.task, s.store.load(TASK_ID)!, ctx, s.promptFile, null)
+    await applyResult(s.task, result, ctx)
+
+    const events = readEvents(s.layout)
+    const snap = events.find((e) => e.event === "usage_snapshot")
+    expect(snap).toBeDefined()
+    expect((snap as { tokens_used: number }).tokens_used).toBe(50)
+    expect((snap as { source_path: string }).source_path).toContain(DISCOVERED)
+  })
+
+  it("skips emission + warns when no jsonl exists for the session id", async () => {
+    const s = setup()
+    // Empty projects dir → findClaudeSessionFile returns null.
+    const projects = mkdtempSync(join(tmpdir(), "ucl-projects-empty-"))
+    const runtime = new MockRuntime([simComplete(s.clock, { durationMin: 1 })])
+    const ctx = makeCtx(s, runtime, { claudeProjectsDir: projects })
+
+    const result = await runEpisode(s.task, s.store.load(TASK_ID)!, ctx, s.promptFile, null)
+    await applyResult(s.task, result, ctx)
+
+    const events = readEvents(s.layout)
+    expect(events.find((e) => e.event === "usage_snapshot")).toBeUndefined()
+    expect(s.log.has("warn", "no jsonl found")).toBe(true)
   })
 })

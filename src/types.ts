@@ -26,14 +26,26 @@ export interface InvokeOpts {
   handoffTimeoutMs: number
 }
 
+/**
+ * Side-channel info pollUntilDone reports back about wind-down injection so
+ * applyResult can emit a `wind_down_injected` event without re-deriving the
+ * boundary. `null`/absent = the wind-down branch was never taken this episode.
+ */
+export interface WindDownInfo {
+  /** Wall-clock minutes between the boundary and the actual injection.
+   * Negative when injection lagged past the boundary (typical); 0 when
+   * injection landed exactly on the boundary. */
+  atMinutesBeforeBoundary: number
+}
+
 export type EpisodeResult =
-  | { status: "completed"; durationMs: number; discoveredSessionId?: string | null }
-  | { status: "rate_limited"; resumeAt: Date; discoveredSessionId?: string | null }
-  | { status: "weekly_limited"; resumeAt: Date; discoveredSessionId?: string | null }      // NEW v2
-  | { status: "context_full"; handoffWritten: boolean; discoveredSessionId?: string | null }  // NEW v2 (F02)
-  | { status: "timeout"; discoveredSessionId?: string | null }
-  | { status: "error"; reason: string; discoveredSessionId?: string | null }
-  | { status: "lost"; reason: string; discoveredSessionId?: string | null }
+  | { status: "completed"; durationMs: number; discoveredSessionId?: string | null; windDownInjected?: WindDownInfo | null }
+  | { status: "rate_limited"; resumeAt: Date; discoveredSessionId?: string | null; windDownInjected?: WindDownInfo | null }
+  | { status: "weekly_limited"; resumeAt: Date; discoveredSessionId?: string | null; windDownInjected?: WindDownInfo | null }      // NEW v2
+  | { status: "context_full"; handoffWritten: boolean; discoveredSessionId?: string | null; windDownInjected?: WindDownInfo | null }  // NEW v2 (F02)
+  | { status: "timeout"; discoveredSessionId?: string | null; windDownInjected?: WindDownInfo | null }
+  | { status: "error"; reason: string; discoveredSessionId?: string | null; windDownInjected?: WindDownInfo | null }
+  | { status: "lost"; reason: string; discoveredSessionId?: string | null; windDownInjected?: WindDownInfo | null }
 
 export interface Runtime {
   invoke(opts: InvokeOpts): Promise<EpisodeResult>
@@ -91,9 +103,9 @@ export type Event =
   | { ts: string; event: "context_compaction"; task: string; episode: number }
   | { ts: string; event: "handoff_written"; task: string; path: string }
   | { ts: string; event: "handoff_resumed"; task: string; path: string }
-  | { ts: string; event: "wind_down_injected"; task: string; episode: number }
+  | { ts: string; event: "wind_down_injected"; task: string; episode: number; at_minutes_before_boundary: number }
   | { ts: string; event: "queued_due_to_concurrency_cap"; task: string }
-  | { ts: string; event: "usage_snapshot"; task: string; episode: number; session_tokens: number }
+  | { ts: string; event: "usage_snapshot"; task: string; episode: number; tokens_used: number; source_path: string }
   | { ts: string; event: "archive_moved"; task: string }
   | { ts: string; event: "error"; reason: string }
 
