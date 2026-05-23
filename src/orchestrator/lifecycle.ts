@@ -99,15 +99,52 @@ export function findResumableTasks(
 }
 
 /**
- * Detect orphaned tasks: state=running on disk but no corresponding zellij tab.
- * Caller passes `liveTabs` derived from `zellij action list-panes` for the parent session.
- * Returns the orphan task IDs (caller is expected to suspend them with reason "orphan").
+ * Detect orphaned tasks: any state.state="running" on disk at preflight. The
+ * orchestrator runs this BEFORE any zellij tabs are (re-)created, so a running
+ * marker can only mean a prior crashed run.
  */
-export function findOrphans(
-  store: TaskStateStore,
-  liveTabNames: Set<string>,
-): string[] {
+export function findOrphans(store: TaskStateStore): string[] {
   return store.listAll()
-    .filter((s) => s.state === "running" && !liveTabNames.has(s.task_id))
+    .filter((s) => s.state === "running")
     .map((s) => s.task_id)
+}
+
+/**
+ * Full orphan-recovery sweep, called at orchestrator preflight.
+ *
+ * For each orphan task, marks it paused with one of two reasons:
+ *   - "user-stop-now" if `layout.stopNowFlagFile` exists (set by
+ *     `ucl stop --now` immediately before SIGKILL).
+ *   - "orphan" otherwise (machine crash, zellij death, etc.).
+ *
+ * The stop-now flag is consumed (deleted) at the end of the sweep so a later
+ * orphan from a different cause doesn't inherit the wrong reason.
+ *
+ * Emits one `task_paused` event per affected task.
+ */
+export async function recoverOrphans(
+  store: TaskStateStore,
+  layout: Layout,
+  now: Date,
+): Promise<string[]> {
+  const stopNow = existsSync(layout.stopNowFlagFile)
+  const reason: PausedReason = stopNow ? "user-stop-now" : "orphan"
+  const orphans = findOrphans(store)
+  for (const id of orphans) {
+    await store.update(id, (s) => {
+      s.state = "paused"
+      s.paused_reason = reason
+    })
+    appendEvent(layout, {
+      ts: now.toISOString(),
+      event: "task_paused",
+      task: id,
+      episode: 0,
+      reason,
+    })
+  }
+  if (stopNow) {
+    try { rmSync(layout.stopNowFlagFile) } catch { /* best-effort */ }
+  }
+  return orphans
 }

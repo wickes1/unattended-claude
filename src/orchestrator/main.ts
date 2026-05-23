@@ -27,9 +27,9 @@ import { TaskStateStore } from "./state-store.ts"
 import { RateLimitGate, WeeklyLimitGate } from "./rate-limit.ts"
 import {
   acquireLock,
-  findOrphans,
   findResumableTasks,
   installSignalHandlers,
+  recoverOrphans,
   releaseLock,
   suspendForShutdown,
 } from "./lifecycle.ts"
@@ -130,20 +130,9 @@ export async function runOrchestrator(
 
   // 5. Orphan recovery — at preflight, no zellij tabs exist yet for this run,
   //    so any state.state="running" is an orphan from a prior crashed run.
+  //    If `stop --now` left a flag, surface "user-stop-now" instead of "orphan".
   const store = new TaskStateStore(deps.layout, deps.clock)
-  for (const id of findOrphans(store, new Set())) {
-    await store.update(id, (s) => {
-      s.state = "paused"
-      s.paused_reason = "orphan"
-    })
-    appendEvent(deps.layout, {
-      ts: deps.clock.now().toISOString(),
-      event: "task_paused",
-      task: id,
-      episode: 0,
-      reason: "orphan",
-    })
-  }
+  await recoverOrphans(store, deps.layout, deps.clock.now())
 
   // 5b. Auto-archive preflight (F10): move done/failed tasks older than
   //     cfg.archive.autoAfterDays into archive/. Disabled when value <= 0.

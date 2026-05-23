@@ -40,6 +40,9 @@ export class Layout {
   get handoffsDir(): string { return join(this.stateDir, "handoffs") }
   get weeklyPausedFile(): string { return join(this.stateDir, "weekly-paused-until.txt") }
   get lockFile(): string { return join(this.stateDir, ".lock") }
+  /** Sentinel written by `ucl stop --now` before SIGKILL; consumed by the next
+   *  run's orphan recovery to surface `paused_reason="user-stop-now"`. */
+  get stopNowFlagFile(): string { return join(this.stateDir, "stop-now.flag") }
   get logsDir(): string { return join(this.runtimeDir, "logs") }
 
   taskDocFile(id: string): string { return join(this.tasksDir, `${id}.md`) }
