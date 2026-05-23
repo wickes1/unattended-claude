@@ -308,9 +308,85 @@ describe("renderStats", () => {
       totalTasksDone: 1,
       totalTasksFailed: 0,
       fellBackToJsonlScan: false,
+      utilizationPct: null,
     }
     const out = renderStats(summary)
     expect(out).toContain("1,234,567")
+  })
+})
+
+// ── subscription.weekly_token_cap wiring (Phase 2 ship-readiness) ─────
+//
+// `Subscription utilization: N%` was promised in DESIGN §十二 but the
+// existing buildStats never computed it — it was a phantom field. These
+// tests pin the new wiring:
+//   - happy path: cap > 0 → utilizationPct ∈ [0, 200], rendered as `N% (weekly)`
+//   - cap = 0 → utilizationPct === null, rendered as `n/a` with steering text
+describe("buildStats: subscription utilization (Phase 2)", () => {
+  it("computes utilization% from usage_snapshot tokens over weeklyTokenCap", () => {
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date("2026-05-23T12:00:00Z")
+
+    // 700 tokens yesterday + 300 today = 1000 tokens in last 7 days.
+    appendEvent(layout, {
+      ts: new Date(now.getTime() - 86_400_000).toISOString(),
+      event: "usage_snapshot",
+      task: "t1",
+      episode: 1,
+      tokens_used: 700,
+      source_path: "/x.jsonl",
+    })
+    appendEvent(layout, {
+      ts: now.toISOString(),
+      event: "usage_snapshot",
+      task: "t1",
+      episode: 2,
+      tokens_used: 300,
+      source_path: "/x.jsonl",
+    })
+
+    // cap = 2000 → 1000 / 2000 = 50%.
+    const s = buildStats(layout, projects, 7, now, 2000)
+    expect(s.utilizationPct).toBe(50)
+    const out = renderStats(s)
+    expect(out).toContain("Subscription utilization: 50% (weekly)")
+  })
+
+  it("renders n/a steering line when weeklyTokenCap is 0", () => {
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date("2026-05-23T12:00:00Z")
+    // Even with token events present, cap=0 → utilizationPct=null.
+    appendEvent(layout, {
+      ts: now.toISOString(),
+      event: "usage_snapshot",
+      task: "t1",
+      episode: 1,
+      tokens_used: 12345,
+      source_path: "/x.jsonl",
+    })
+    const s = buildStats(layout, projects, 7, now, 0)
+    expect(s.utilizationPct).toBeNull()
+    const out = renderStats(s)
+    expect(out).toContain("Subscription utilization: n/a (set subscription.weekly_token_cap to enable)")
+  })
+
+  it("clamps overage to 200% so pathological event ts cannot blow up the display", () => {
+    const layout = freshLayout()
+    const projects = freshProjectsDir()
+    const now = new Date("2026-05-23T12:00:00Z")
+    // 10x the cap → would compute 1000%, clamp to 200%.
+    appendEvent(layout, {
+      ts: now.toISOString(),
+      event: "usage_snapshot",
+      task: "t1",
+      episode: 1,
+      tokens_used: 10_000,
+      source_path: "/x.jsonl",
+    })
+    const s = buildStats(layout, projects, 7, now, 1000)
+    expect(s.utilizationPct).toBe(200)
   })
 })
 

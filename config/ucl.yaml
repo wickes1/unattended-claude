@@ -27,6 +27,13 @@ rate_limit:
 archive:
   auto_after_days: 7
 
+subscription:
+  # Best-effort weekly token cap for your Claude subscription. Used by
+  # `ucl stats` to render a utilization percentage. Anthropic does not
+  # publish a stable per-plan number, so tune this for your plan + use
+  # pattern. Leave as 0 to suppress the utilization line.
+  weekly_token_cap: 1000000
+
 schedule:
   windows: []                                     # default empty; add via `ucl schedule add`
 

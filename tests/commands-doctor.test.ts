@@ -35,6 +35,7 @@ function mkCfg(overrides: { bin?: "claude" | "happy"; runtimeDir?: string; confi
     detection: { dialogPollIntervalMs: 500, dialogTimeoutMs: 30_000 },
     rateLimit: { safetyMarginMs: 30_000, parseFailFallbackMs: 3_600_000 },
     archive: { autoAfterDays: 7 },
+    subscription: { weeklyTokenCap: 0 },
     schedule: { windows: [] },
     terminal: { term: "xterm-256color", envScrub: [], envSet: {} },
     logging: { level: "info", dir: join(runtimeDir, "logs") },

@@ -20,6 +20,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     detection: { dialogPollIntervalMs: 500, dialogTimeoutMs: 30_000 },
     rateLimit: { safetyMarginMs: 30_000, parseFailFallbackMs: 60 * 60_000 },
     archive: { autoAfterDays: 7 },
+    subscription: { weeklyTokenCap: 0 },
     schedule: { windows: [] },
     terminal: {
       term: "xterm-256color",

@@ -400,6 +400,9 @@ execution:
 archive:
   auto_after_days: 7
 
+subscription:
+  weekly_token_cap: 1000000                   # best-effort cap for `ucl stats` utilization%; 0 disables
+
 schedule:
   windows:
     - { start: "22:30", end: "06:30", days: [mon, tue, wed, thu, fri, sat, sun] }
