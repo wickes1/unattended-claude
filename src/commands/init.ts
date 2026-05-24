@@ -1,4 +1,5 @@
 /** `ucl init` — interactive setup wizard. */
+import { CryptoHasher } from "bun"
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -207,11 +208,13 @@ export async function cmdInit(opts: {
       notes.push(`Created empty todo.md at ${layout.todoFile}`)
     }
 
-    // 8a. Install skill templates with upgrade rule.
-    //     First-install copies verbatim. Re-init with a newer template_version
-    //     warns the user but never overwrites — user opts in via
-    //     `rm -r <skill-dir> && ucl init`. Same "user data is sacred" model as
-    //     ucl.yaml. See plan 2026-05-23-skills-to-runtime.md.
+    // 8a. Install skill templates with hash-stamped upgrade rule.
+    //     First-install stamps a `template_hash: sha256:<hex>` line into the
+    //     user's frontmatter. On re-init with a bumped `template_version`, we
+    //     re-hash the user's file: if it matches the stamp, the user hasn't
+    //     edited and we silently upgrade; if it doesn't, we warn and keep
+    //     hands off. Missing-hash (pre-G04 installs) is treated as modified.
+    //     See plan 2026-05-23-skill-auto-update.md.
     const skillsTemplateDir = opts.skillsTemplateDir
       ?? resolve(import.meta.dir, "..", "..", "config", "skills")
     if (existsSync(skillsTemplateDir)) {
@@ -222,23 +225,38 @@ export async function cmdInit(opts: {
         const userSkillFile = layout.skillFile(skillName)
         const templateSkillFile = join(skillsTemplateDir, skillName, "SKILL.md")
         if (!existsSync(templateSkillFile)) continue
+        const templateContent = readFileSync(templateSkillFile, "utf8")
+        const templateHash = computeSkillHash(templateContent)
+        const tplVer = readSkillVersion(templateSkillFile)
 
         if (!existsSync(userSkillFile)) {
-          // First install — copy verbatim.
+          // Fresh install — stamp hash into the user's copy.
           ensureDir(userSkillDir)
-          atomicWrite(userSkillFile, readFileSync(templateSkillFile, "utf8"))
+          atomicWrite(userSkillFile, stampSkillHash(templateContent, templateHash))
           notes.push(`Installed skill ${skillName} at ${userSkillFile}`)
           continue
         }
 
-        // Already installed — version-compare upgrade decision.
+        // Already installed. Quick out if versions match.
         const userVer = readSkillVersion(userSkillFile)
-        const tplVer = readSkillVersion(templateSkillFile)
-        if (userVer >= tplVer) continue // already up to date
-        // Template is newer; we never overwrite.
-        log(
-          `(skill ${skillName}: template v${tplVer} available, you have v${userVer}; not overwriting. To accept upstream: rm -r ${userSkillDir} && ucl init)`,
-        )
+        if (userVer === tplVer) continue
+
+        // Template is newer. Decide silent-upgrade vs warn based on hash.
+        const storedHash = readSkillHash(userSkillFile)
+        const userContent = readFileSync(userSkillFile, "utf8")
+        const userHash = computeSkillHash(userContent)
+        const unmodified = storedHash !== null && storedHash === userHash
+
+        if (unmodified) {
+          // User hasn't edited since install — silent upgrade.
+          atomicWrite(userSkillFile, stampSkillHash(templateContent, templateHash))
+          log(`(skill ${skillName}: upgraded v${userVer} → v${tplVer}; your installation was unmodified)`)
+        } else {
+          // User edited (or missing hash = unknown provenance) — protect their work.
+          log(
+            `(skill ${skillName}: template v${tplVer} available, you have v${userVer}; not overwriting your edits. To accept upstream: rm -r ${userSkillDir} && ucl init)`,
+          )
+        }
       }
     }
 
@@ -315,4 +333,43 @@ function readSkillVersion(skillFile: string): number {
   if (!m) return 0
   const verLine = /^template_version:\s*(\d+)\s*$/m.exec(m[1]!)
   return verLine ? Number(verLine[1]) : 0
+}
+
+/**
+ * Compute sha256 of skill content with the `template_hash:` line stripped, so
+ * the stamp itself doesn't perturb future comparisons. Hex digest.
+ */
+function computeSkillHash(content: string): string {
+  const stripped = content.split("\n")
+    .filter((l) => !/^template_hash:\s/.test(l))
+    .join("\n")
+  return new CryptoHasher("sha256").update(stripped).digest("hex")
+}
+
+/**
+ * Read `template_hash` from a SKILL.md frontmatter block. Returns null when
+ * absent — pre-G04 installs are missing this field and the caller treats
+ * null as "modified" (safety fallback: never overwrite unknown provenance).
+ */
+function readSkillHash(skillFile: string): string | null {
+  const src = readFileSync(skillFile, "utf8")
+  const m = /^---\n([\s\S]*?)\n---/.exec(src)
+  if (!m) return null
+  const hashLine = /^template_hash:\s*sha256:([a-f0-9]{64})\s*$/m.exec(m[1]!)
+  return hashLine ? hashLine[1]! : null
+}
+
+/**
+ * Insert (or replace) `template_hash: sha256:<hash>` into the frontmatter,
+ * right after the `template_version:` line. Any pre-existing hash line is
+ * removed first so re-stamping is idempotent.
+ */
+function stampSkillHash(content: string, hash: string): string {
+  const cleaned = content.split("\n")
+    .filter((l) => !/^template_hash:\s/.test(l))
+    .join("\n")
+  return cleaned.replace(
+    /^(template_version:\s*\d+\s*$)/m,
+    `$1\ntemplate_hash: sha256:${hash}`,
+  )
 }

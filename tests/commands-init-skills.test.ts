@@ -87,10 +87,10 @@ async function runInit(opts: {
 }
 
 describe("cmdInit skill install + upgrade", () => {
-  it("first init copies all skill templates from config/skills to runtime_dir/.claude/skills", async () => {
+  it("first init installs all skill templates with stamped frontmatter (body preserved, hash + version + name retained)", async () => {
     const d = freshDirs()
-    const briefSrc = writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 1))
-    const reviewSrc = writeTemplateSkill(d.skillsTemplateDir, "task-review", makeSkillBody("task-review", 1))
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 1, "brief-distinct-marker"))
+    writeTemplateSkill(d.skillsTemplateDir, "task-review", makeSkillBody("task-review", 1, "review-distinct-marker"))
 
     await runInit(d)
 
@@ -98,9 +98,20 @@ describe("cmdInit skill install + upgrade", () => {
     const reviewDst = join(d.runtimeDir, ".claude", "skills", "task-review", "SKILL.md")
     expect(existsSync(briefDst)).toBe(true)
     expect(existsSync(reviewDst)).toBe(true)
-    // Byte-for-byte equality with the template.
-    expect(readFileSync(briefDst, "utf8")).toBe(readFileSync(briefSrc, "utf8"))
-    expect(readFileSync(reviewDst, "utf8")).toBe(readFileSync(reviewSrc, "utf8"))
+
+    // G04 stamps `template_hash` into frontmatter — file is no longer byte-equal
+    // to the template, but body + key frontmatter fields are preserved.
+    const briefInstalled = readFileSync(briefDst, "utf8")
+    expect(briefInstalled).toContain("brief-distinct-marker")
+    expect(briefInstalled).toContain("name: task-brief")
+    expect(briefInstalled).toContain("template_version: 1")
+    expect(briefInstalled).toMatch(/^template_hash:\s*sha256:[a-f0-9]{64}\s*$/m)
+
+    const reviewInstalled = readFileSync(reviewDst, "utf8")
+    expect(reviewInstalled).toContain("review-distinct-marker")
+    expect(reviewInstalled).toContain("name: task-review")
+    expect(reviewInstalled).toContain("template_version: 1")
+    expect(reviewInstalled).toMatch(/^template_hash:\s*sha256:[a-f0-9]{64}\s*$/m)
   })
 
   it("first init logs an Installed-skill note per skill", async () => {
@@ -135,12 +146,16 @@ describe("cmdInit skill install + upgrade", () => {
     expect(joined).not.toContain("Installed skill task-brief")
   })
 
-  it("re-init with newer template version warns but does NOT overwrite", async () => {
+  it("re-init with newer template version + user-modified skill → warn, no overwrite", async () => {
     const d = freshDirs()
     writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 1, "v1 body"))
     await runInit(d)
     const dst = join(d.runtimeDir, ".claude", "skills", "task-brief", "SKILL.md")
-    const installedAtV1 = readFileSync(dst, "utf8")
+
+    // Simulate a user edit — breaks the stamped hash so re-init at v2 must
+    // warn rather than silently upgrading.
+    const userEdited = readFileSync(dst, "utf8") + "\n# my edit\n"
+    writeFileSync(dst, userEdited)
 
     // Bump template to v2.
     writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 2, "v2 body"))
@@ -151,8 +166,8 @@ describe("cmdInit skill install + upgrade", () => {
     expect(joined).toContain("template v2 available")
     expect(joined).toContain("you have v1")
     expect(joined).toContain("not overwriting")
-    // User file is still v1 — never overwritten.
-    expect(readFileSync(dst, "utf8")).toBe(installedAtV1)
+    // User file still contains their edit — never overwritten.
+    expect(readFileSync(dst, "utf8")).toBe(userEdited)
   })
 
   it("user-modified skill at same version still skips (no warn — version match dominates)", async () => {
@@ -200,5 +215,98 @@ legacy body
     const joined = lines.join("\n")
     expect(joined).toContain("template v1 available")
     expect(joined).toContain("you have v0")
+  })
+
+  // --- G04: hash-stamped silent upgrade ---
+
+  it("first install stamps template_hash into user's SKILL.md frontmatter", async () => {
+    const d = freshDirs()
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 1))
+    await runInit(d)
+    const dst = join(d.runtimeDir, ".claude", "skills", "task-brief", "SKILL.md")
+    const installed = readFileSync(dst, "utf8")
+    // template_hash sits in the frontmatter as `sha256:<64-hex>`.
+    expect(installed).toMatch(/^template_hash:\s*sha256:[a-f0-9]{64}\s*$/m)
+    // Confirmed to be in the frontmatter block (between the two `---` fences).
+    const fm = /^---\n([\s\S]*?)\n---/.exec(installed)
+    expect(fm).not.toBeNull()
+    expect(fm![1]).toMatch(/^template_hash:\s*sha256:[a-f0-9]{64}\s*$/m)
+  })
+
+  it("re-init silently upgrades unmodified skill to new template version", async () => {
+    const d = freshDirs()
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 1, "v1 body"))
+    await runInit(d)
+    const dst = join(d.runtimeDir, ".claude", "skills", "task-brief", "SKILL.md")
+
+    // Bump template to v2 with a distinctive body marker.
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 2, "v2-upgraded-marker"))
+
+    const lines: string[] = []
+    await runInit({ ...d, log: (s) => { lines.push(s) } })
+
+    const after = readFileSync(dst, "utf8")
+    // User file now contains the v2 body and v2 version, with a fresh hash stamp.
+    expect(after).toContain("v2-upgraded-marker")
+    expect(after).toContain("template_version: 2")
+    expect(after).toMatch(/^template_hash:\s*sha256:[a-f0-9]{64}\s*$/m)
+
+    const joined = lines.join("\n")
+    expect(joined).toContain("upgraded v1 → v2")
+    expect(joined).toContain("unmodified")
+    // No warn — clean upgrade.
+    expect(joined).not.toMatch(/not overwriting/)
+    expect(joined).not.toMatch(/template v2 available/)
+  })
+
+  it("re-init does NOT upgrade user-modified skill (hash mismatch protects)", async () => {
+    const d = freshDirs()
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 1, "v1 body"))
+    await runInit(d)
+    const dst = join(d.runtimeDir, ".claude", "skills", "task-brief", "SKILL.md")
+
+    // User edits the file — breaks the stamped hash.
+    const userEdited = readFileSync(dst, "utf8") + "\n# user added section\n"
+    writeFileSync(dst, userEdited)
+
+    // Bump template to v2.
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 2, "v2 body"))
+
+    const lines: string[] = []
+    await runInit({ ...d, log: (s) => { lines.push(s) } })
+
+    // File still has the user's edit verbatim.
+    expect(readFileSync(dst, "utf8")).toBe(userEdited)
+    const joined = lines.join("\n")
+    expect(joined).toContain("template v2 available")
+    expect(joined).toContain("not overwriting")
+    // Not silently upgraded.
+    expect(joined).not.toMatch(/upgraded v\d+ → v\d+/)
+  })
+
+  it("re-init treats missing template_hash as modified (safety fallback for pre-G04 installs)", async () => {
+    const d = freshDirs()
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 1))
+    // Pre-create the user skill file at v1 WITHOUT template_hash — simulates
+    // a skill installed by a pre-G04 ucl (frontmatter has template_version but
+    // no template_hash line).
+    const userDir = join(d.runtimeDir, ".claude", "skills", "task-brief")
+    mkdirSync(userDir, { recursive: true })
+    const dst = join(userDir, "SKILL.md")
+    const preG04Content = makeSkillBody("task-brief", 1, "pre-G04 install body")
+    writeFileSync(dst, preG04Content)
+
+    // Bump template to v2.
+    writeTemplateSkill(d.skillsTemplateDir, "task-brief", makeSkillBody("task-brief", 2, "v2 body"))
+
+    const lines: string[] = []
+    await runInit({ ...d, log: (s) => { lines.push(s) } })
+
+    // No overwrite — user file unchanged.
+    expect(readFileSync(dst, "utf8")).toBe(preG04Content)
+    const joined = lines.join("\n")
+    expect(joined).toContain("template v2 available")
+    expect(joined).toContain("not overwriting")
+    expect(joined).not.toMatch(/upgraded v\d+ → v\d+/)
   })
 })
