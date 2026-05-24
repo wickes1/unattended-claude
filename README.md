@@ -19,7 +19,7 @@ Re-run the script anytime to refresh the symlink and install metadata. `bun scri
 | 1 | `ucl init` | builds `~/unattended/` and `~/.config/unattended-claude/ucl.yaml` |
 | 2 | edit `~/unattended/todo.md` | one inbox line per intent, no checkboxes |
 | 3 | `ucl plan` | interactive grilling → frozen `tasks/<YYYY-MM-DD-NN-slug>.md` |
-| 4 | `ucl run --until 06:30` | starts the zellij worker session, runs until the window ends |
+| 4 | `ucl run --until 06:30` | daemonizes the worker (returns shell prompt immediately); add `--foreground` to keep it in the current terminal |
 | 5 | next morning, `ucl review` | AI walks you through what happened, optional `--synthesize` report |
 
 ## zellij operation cheat sheet
@@ -43,7 +43,7 @@ All `ucl` commands force `ZELLIJ_SOCKET_DIR=/tmp/zellij` (macOS `$TMPDIR` is too
 |---|---|
 | `ucl init` | first-time setup; idempotent |
 | `ucl plan [--force]` | interactive: convert new `todo.md` lines into frozen task docs |
-| `ucl run [--until HH:MM\|+Nm]` | start the worker; stops at the window edge, queue empty, or `ucl stop` |
+| `ucl run [--until HH:MM\|+Nm] [--foreground]` | start the worker (daemonizes by default; `--foreground` to keep in current terminal); stops at the window edge, queue empty, or `ucl stop` |
 | `ucl stop [--now]` | graceful pause (`--now` for hard kill) |
 | `ucl schedule list / add / remove / install / uninstall` | manage launchd entries from `schedule.windows` |
 | `ucl status` | queue snapshot, no AI |

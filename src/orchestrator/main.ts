@@ -56,6 +56,7 @@ export type RunReason =
   | "weekly_limited"
   | "lock_held"
   | "weekly_paused"
+  | "daemonized"
 
 export interface RunResult {
   reason: RunReason
