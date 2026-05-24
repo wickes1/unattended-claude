@@ -224,6 +224,35 @@ export async function withPromptsDir<T>(
   }
 }
 
+/**
+ * Poll for the lockfile that the daemonized child writes during `acquireLock`.
+ * Returns true once the file exists AND its contents match `expectedPid`.
+ *
+ * Why: parent spawns child and immediately returns the shell prompt. If the
+ * user pipes `ucl run && ucl stop` (or runs `ucl stop` very quickly), stop
+ * would race the child's `acquireLock` and report "no worker running". A
+ * brief wait closes that gap.
+ */
+async function waitForChildLockfile(
+  layout: Layout,
+  expectedPid: number,
+  timeoutMs: number = 5000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (existsSync(layout.lockFile)) {
+      try {
+        const pid = Number(readFileSync(layout.lockFile, "utf8").trim())
+        if (pid === expectedPid) return true
+      } catch {
+        /* lockfile read raced with child write; retry */
+      }
+    }
+    await Bun.sleep(50)
+  }
+  return false
+}
+
 /** Main `ucl run` entry. */
 export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
   const args = parseRunArgs(argv)
@@ -249,7 +278,6 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
   }
 
   const windowEnd = deriveWindowEnd(cfg, args.until, clock.now())
-  log.log("info", `run starting; window ends ${windowEnd ? windowEnd.toISOString() : "(unbounded)"}`)
 
   // Daemonize unless --foreground or already a daemon child (re-exec'd by parent).
   const isDaemonChild = process.env.UCL_DAEMON_CHILD === "1"
@@ -264,16 +292,29 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
         stdin: "ignore",
         stdout: fd,
         stderr: fd,
+        // detached: true → child becomes its own session/process-group leader
+        // (setsid()), so it survives SIGHUP when the parent shell closes.
+        detached: true,
       })
-      // Detach: parent does not wait for child; child becomes session leader.
+      // unref(): parent's event loop won't keep running just to wait on child.
       child.unref()
-      console.log(`orchestrator detached as PID ${child.pid}, logs at ${logPath}`)
+      // Wait briefly for the child to claim the lockfile so an immediate
+      // `ucl stop` after `ucl run` sees the daemon, not "no worker running".
+      const claimed = await waitForChildLockfile(layout, child.pid!, 5000)
+      if (claimed) {
+        console.log(`orchestrator detached as PID ${child.pid}, logs at ${logPath}`)
+      } else {
+        console.log(
+          `orchestrator spawned (PID ${child.pid}) but did not claim lockfile within 5s; check ${logPath} for errors`,
+        )
+      }
       return { reason: "daemonized", taskCount: 0 }
     } finally {
       closeSync(fd)
     }
   }
   // Foreground or daemon-child path continues below.
+  log.log("info", `run starting; window ends ${windowEnd ? windowEnd.toISOString() : "(unbounded)"}`)
 
   const runtime = new InteractiveZellijRuntime(cfg, log, clock)
   return withPromptsDir((promptsDir) => {
