@@ -156,6 +156,98 @@ describe("PromptBuilder.windDown", () => {
   })
 })
 
+describe("PromptBuilder happy-title preamble (bin=happy)", () => {
+  it("initial prepends mcp__happy__change_title call with [ucl] prefix", () => {
+    const promptsDir = freshPromptsDir()
+    const task: TaskDoc = {
+      id: "2026-05-23-01-x",
+      title: "build the auth flow",
+      workdir: "/tmp/x",
+      serial: false,
+      file: (() => {
+        const f = join(mkdtempSync(join(tmpdir(), "ucl-pb-task-")), "x.md")
+        writeFileSync(f, "task body\n")
+        return f
+      })(),
+    }
+    const pb = new PromptBuilder({ promptsDir, bin: "happy" })
+    const r = pb.initial(task, 1)
+    expect(r.text).toContain("mcp__happy__change_title")
+    expect(r.text).toContain("[ucl] build the auth flow")
+    expect(r.text).toContain("task body")
+  })
+
+  it("initial does NOT prepend when bin=claude (default)", () => {
+    const promptsDir = freshPromptsDir()
+    const task = fakeTaskDoc("task body\n")
+    const pb = new PromptBuilder({ promptsDir })
+    const r = pb.initial(task, 1)
+    expect(r.text).not.toContain("mcp__happy__change_title")
+  })
+
+  it("wakeUp prepends preamble when bin=happy", () => {
+    const promptsDir = freshPromptsDir()
+    const task: TaskDoc = {
+      id: "x",
+      title: "T",
+      workdir: "/tmp/x",
+      serial: false,
+      file: "/tmp/x.md",
+    }
+    const pb = new PromptBuilder({ promptsDir, bin: "happy" })
+    const r = pb.wakeUp(task, "schedule-boundary")
+    expect(r?.text).toContain("mcp__happy__change_title")
+    expect(r?.text).toContain("Schedule window ended")
+  })
+
+  it("resumeWithHandoff prepends preamble when bin=happy", () => {
+    const promptsDir = freshPromptsDir()
+    const dir = mkdtempSync(join(tmpdir(), "ucl-pb-h2-"))
+    const handoffPath = join(dir, "h.md")
+    writeFileSync(handoffPath, "handoff body\n")
+    const task: TaskDoc = {
+      id: "y",
+      title: "T",
+      workdir: dir,
+      serial: false,
+      file: "/tmp/y.md",
+    }
+    const pb = new PromptBuilder({ promptsDir, bin: "happy" })
+    const r = pb.resumeWithHandoff(task, handoffPath, 2)
+    expect(r.text).toContain("mcp__happy__change_title")
+    expect(r.text).toContain("handoff body")
+  })
+
+  it("title truncates to 40 chars when task title is long", () => {
+    const promptsDir = freshPromptsDir()
+    const longTitle = "this is a very long task title that exceeds forty characters easily"
+    const task: TaskDoc = {
+      id: "z",
+      title: longTitle,
+      workdir: "/tmp/z",
+      serial: false,
+      file: (() => {
+        const f = join(mkdtempSync(join(tmpdir(), "ucl-pb-task-z-")), "z.md")
+        writeFileSync(f, "body\n")
+        return f
+      })(),
+    }
+    const pb = new PromptBuilder({ promptsDir, bin: "happy" })
+    const r = pb.initial(task, 1)
+    // Extract the title="..." part and assert it's <= 40 chars
+    const m = /title="([^"]+)"/.exec(r.text)
+    expect(m).not.toBeNull()
+    expect(m![1]!.length).toBeLessThanOrEqual(40)
+    expect(m![1]).toContain("[ucl]")
+  })
+
+  it("windDown does NOT prepend (session is ending, no need to retitle)", () => {
+    const pb = new PromptBuilder({ promptsDir: freshPromptsDir(), bin: "happy" })
+    const r = pb.windDown()
+    expect(r.text).not.toContain("mcp__happy__change_title")
+  })
+})
+
 describe("PromptBuilder.resumeWithHandoff", () => {
   function withHandoff(body: string): { task: TaskDoc; handoffPath: string } {
     const dir = mkdtempSync(join(tmpdir(), "ucl-pb-handoff-"))
