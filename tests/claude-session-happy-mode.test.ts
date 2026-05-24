@@ -8,7 +8,7 @@
  *   - bin=claude, first launch → does NOT call discoverViaStatus (--session-id works)
  */
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SimClock } from "../src/clock.ts"
@@ -36,6 +36,7 @@ function fakeZellij(opts: {
 } = {}): { z: ZellijOps; calls: Call[] } {
   const calls: Call[] = []
   let captureIdx = 0
+  let pendingPasteContent = ""
   const z: ZellijOps = {
     async newTab(s, t) {
       calls.push({ fn: "newTab", args: [s, t] })
@@ -52,12 +53,21 @@ function fakeZellij(opts: {
     async pasteFile(s, t, file) {
       calls.push({ fn: "pasteFile", args: [s, t, file] })
     },
+    async pasteFileNoSubmit(s, t, file) {
+      calls.push({ fn: "pasteFileNoSubmit", args: [s, t, file] })
+      try { pendingPasteContent = readFileSync(file, "utf8") } catch { /* fine */ }
+    },
+    async submitInput(s, t) {
+      calls.push({ fn: "submitInput", args: [s, t] })
+      pendingPasteContent = ""
+    },
     async pipePane(s, t, file) {
       calls.push({ fn: "pipePane", args: [s, t, file] })
     },
     async capture(s, t, lines) {
       const idx = captureIdx++
-      const text = opts.captureScript ? opts.captureScript(idx) : "❯ "
+      const scripted = opts.captureScript ? opts.captureScript(idx) : "❯ "
+      const text = pendingPasteContent ? `${scripted}\n${pendingPasteContent}` : scripted
       calls.push({ fn: "capture", args: [s, t, lines, text] })
       return text
     },
@@ -95,12 +105,14 @@ describe("runClaudeSession: bin=happy first launch", () => {
       const promptFile = join(dir, "prompt.md")
       writeFileSync(promptFile, "do the thing")
       // Scripted captures:
-      //   0   : handleDialogs → "❯ " (already at input prompt, dialog skipped)
+      //   0   : handleDialogs → "❯ " (input prompt detected; followed by a
+      //         5s settle sleep inside handleDialogs before returning, which
+      //         under SimClock does NOT block test wall-clock time).
       //   1+  : discoverViaStatus → STATUS_PANEL_TEXT (parses UUID immediately)
       //   later: pollUntilDone → "❯ " until sentinel appears
       const { z, calls } = fakeZellij({
         captureScript: (i) => {
-          if (i === 0) return "❯ " // dialog check
+          if (i === 0) return "❯ " // dialog check (settle sleep runs after)
           if (i === 1) return STATUS_PANEL_TEXT // first capture inside discoverViaStatus
           if (i >= 4) writeFileSync(sentinel, "done\n")
           return "❯ "

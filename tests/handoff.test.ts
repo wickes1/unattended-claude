@@ -50,6 +50,7 @@ function fakeZellij(opts: {
 } = {}): { z: ZellijOps; calls: Call[] } {
   const calls: Call[] = []
   let captureIdx = 0
+  let pendingPasteContent = ""
   const z: ZellijOps = {
     async newTab(s, t) {
       calls.push({ fn: "newTab", args: [s, t] })
@@ -67,12 +68,21 @@ function fakeZellij(opts: {
     async pasteFile(s, t, file) {
       calls.push({ fn: "pasteFile", args: [s, t, file] })
     },
+    async pasteFileNoSubmit(s, t, file) {
+      calls.push({ fn: "pasteFileNoSubmit", args: [s, t, file] })
+      try { pendingPasteContent = readFileSync(file, "utf8") } catch { /* fine */ }
+    },
+    async submitInput(s, t) {
+      calls.push({ fn: "submitInput", args: [s, t] })
+      pendingPasteContent = ""
+    },
     async pipePane(s, t, file) {
       calls.push({ fn: "pipePane", args: [s, t, file] })
     },
     async capture(s, t, lines) {
       const idx = captureIdx++
-      const text = opts.captureScript ? opts.captureScript(idx) : "❯ "
+      const scripted = opts.captureScript ? opts.captureScript(idx) : "❯ "
+      const text = pendingPasteContent ? `${scripted}\n${pendingPasteContent}` : scripted
       calls.push({ fn: "capture", args: [s, t, lines, text] })
       return text
     },

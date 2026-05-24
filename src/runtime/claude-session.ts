@@ -9,6 +9,8 @@
  * pollUntilDone and runClaudeSession be unit-tested without spawning a real
  * zellij server.
  */
+import { readFileSync } from "node:fs"
+import { RealClock } from "../clock.ts"
 import type { Config } from "../config.ts"
 import type { Clock, EpisodeResult, InvokeOpts, Logger, Runtime, WindDownInfo } from "../types.ts"
 import {
@@ -27,10 +29,12 @@ import {
   newSession,
   newTab as realNewTab,
   pasteFile as realPasteFile,
+  pasteFileNoSubmit as realPasteFileNoSubmit,
   pipePane as realPipePane,
   sendKeys as realSendKeys,
   sendText as realSendText,
   sessionAlive as realSessionAlive,
+  submitInput as realSubmitInput,
 } from "./zellij.ts"
 
 /**
@@ -75,6 +79,8 @@ export interface ZellijOps {
   sendKeys(session: string, tab: string, ...keys: string[]): Promise<void>
   sendText(session: string, tab: string, text: string): Promise<void>
   pasteFile(session: string, tab: string, file: string): Promise<void>
+  pasteFileNoSubmit(session: string, tab: string, file: string): Promise<void>
+  submitInput(session: string, tab: string): Promise<void>
   pipePane(session: string, tab: string, file: string): Promise<void>
   capture(session: string, tab: string, lines: number): Promise<string>
   sessionAlive(session: string): Promise<boolean>
@@ -87,6 +93,8 @@ export const realZellijOps: ZellijOps = {
   sendKeys: realSendKeys,
   sendText: realSendText,
   pasteFile: realPasteFile,
+  pasteFileNoSubmit: realPasteFileNoSubmit,
+  submitInput: realSubmitInput,
   pipePane: realPipePane,
   capture: realCapture,
   sessionAlive: realSessionAlive,
@@ -119,7 +127,14 @@ export function buildLaunchCommand(cfg: Config, opts: InvokeOpts): string {
   }
   // bin=happy first launch: emit no session flag — Happy swallows --session-id.
   const args = [...flags, ...cfg.runtime.extraArgs].join(" ")
-  return `${cfg.runtime.bin} ${args}`.trim().replace(/ +/g, " ")
+  // Prepend `command ` so that user shell aliases / functions (e.g. an
+  // interactive `alias claude='happy --yolo'` in ~/.zshrc) cannot intercept
+  // the launch. `command` is a POSIX builtin (bash + zsh) that bypasses
+  // aliases AND functions, falling through to the $PATH lookup. Without this,
+  // running `claude` inside a zellij interactive shell hits the user's alias
+  // and silently invokes a different binary — surfacing as Bug 2 in the
+  // 2026-05-23 live e2e probe.
+  return `command ${cfg.runtime.bin} ${args}`.trim().replace(/ +/g, " ")
 }
 
 /**
@@ -132,12 +147,19 @@ export async function handleDialogs(
   tab: string,
   cfg: Config,
   log: Logger,
+  clock: Clock,
   z: ZellijOps = realZellijOps,
 ): Promise<boolean> {
-  const deadline = Date.now() + cfg.detection.dialogTimeoutMs
+  const deadline = clock.now().getTime() + cfg.detection.dialogTimeoutMs
   let trustHandled = false
 
-  while (Date.now() < deadline) {
+  // No settle delay here — the paste race against SessionStart-hook streaming
+  // is handled later in S5b by pasteWithVerify (capture-and-retry until the
+  // pasted content is visible in the input field). Returning early on first
+  // `❯` detection is fine because the verify loop will paste-retry until it
+  // lands.
+
+  while (clock.now().getTime() < deadline) {
     const text = await z.capture(session, tab, 40)
     const lines = nonEmptyLines(text)
 
@@ -148,7 +170,7 @@ export async function handleDialogs(
       await z.sendKeys(session, tab, "Enter")
       trustHandled = true
     }
-    await sleep(cfg.detection.dialogPollIntervalMs)
+    await clock.sleep(cfg.detection.dialogPollIntervalMs)
   }
   log.log("error", "dialog timeout — could not reach the input prompt")
   return false
@@ -338,6 +360,104 @@ export async function pollUntilDone(
 }
 
 /**
+ * Pick a probe string from the prompt content — the longest non-empty,
+ * non-frontmatter, non-comment line, truncated to ~40 chars. Used to verify
+ * the paste landed in the input field by searching for this string in the
+ * captured pane.
+ *
+ * Skips frontmatter (between `---` lines) and markdown headings (`#`) because
+ * those are common across task docs and easily collide with rendered UI text.
+ */
+function pickPasteProbe(text: string): string {
+  const lines = text.split("\n")
+  let inFrontmatter = false
+  let frontmatterCount = 0
+  let best = ""
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (line === "---") {
+      frontmatterCount++
+      inFrontmatter = frontmatterCount < 2
+      continue
+    }
+    if (inFrontmatter) continue
+    if (line.length < 8) continue
+    if (line.startsWith("#")) continue
+    if (line.startsWith("-")) continue // checklist items
+    if (line.length > best.length) best = line
+  }
+  return best.slice(0, 40)
+}
+
+/**
+ * Paste a prompt file into the claude TUI input field and verify it landed
+ * before submitting. Retries up to MAX_ATTEMPTS times if the paste doesn't
+ * appear in the captured pane (which happens when claude TUI is mid-render
+ * during SessionStart hook output streaming).
+ *
+ * Why this is necessary: bug 3 from 2026-05-23 live e2e. Plugins like
+ * claude-mem inject heavy context into the TUI for many seconds after
+ * launch, and pastes during that window are clobbered. A simple sleep
+ * doesn't work because the streaming duration is unbounded (depends on how
+ * many past sessions the plugin is summarising).
+ */
+export async function pasteWithVerify(
+  session: string,
+  tab: string,
+  promptFile: string,
+  clock: Clock,
+  log: Logger,
+  z: ZellijOps,
+): Promise<void> {
+  const MAX_ATTEMPTS = 6
+  const PASTE_SETTLE_MS = 1500
+  const RETRY_BACKOFF_MS = 2000
+  const text = readFileSync(promptFile, "utf8")
+  const probe = pickPasteProbe(text)
+  if (!probe) {
+    // Degenerate prompt (all short / frontmatter / headings) — fall back to
+    // the unverified path so we don't deadlock.
+    log.log("warn", "pasteWithVerify: no probe candidate, falling back to unverified paste")
+    await z.pasteFile(session, tab, promptFile)
+    return
+  }
+
+  // Two visibility signals — either is good evidence the paste landed:
+  //   1. The probe substring is visible verbatim in the captured pane (the
+  //      claude TUI echoes the text when it's short enough to render inline).
+  //   2. The "[Pasted text #N +M lines]" placeholder is in the input area
+  //      (claude's collapsed view for multi-line pastes — the actual content
+  //      is in the input buffer, just not echoed). Multi-line task docs
+  //      always render as a placeholder.
+  const PLACEHOLDER_RE = /\[Pasted text #\d+\s*\+\d+\s*lines?\]/
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    await z.pasteFileNoSubmit(session, tab, promptFile)
+    await clock.sleep(PASTE_SETTLE_MS)
+    const captured = await z.capture(session, tab, 80)
+    if (captured.includes(probe) || PLACEHOLDER_RE.test(captured)) {
+      // Paste landed visibly in the pane. Submit.
+      await z.submitInput(session, tab)
+      if (attempt > 1) {
+        log.log("info", `pasteWithVerify: succeeded on attempt ${attempt}`)
+      }
+      return
+    }
+    // Not visible — claude TUI was mid-render. Clear any partial state and retry.
+    log.log(
+      "warn",
+      `pasteWithVerify: attempt ${attempt}/${MAX_ATTEMPTS} not visible (probe="${probe.slice(0, 30)}"), retrying`,
+    )
+    await z.sendKeys(session, tab, "Esc") // clear any partial input
+    await clock.sleep(RETRY_BACKOFF_MS)
+  }
+  // All attempts failed. Submit best-effort so pollUntilDone doesn't hang on
+  // input prompt forever — the last paste may still have landed.
+  log.log("error", `pasteWithVerify: all ${MAX_ATTEMPTS} attempts failed, submitting blind`)
+  await z.submitInput(session, tab)
+}
+
+/**
  * Run a Claude session (v2 §4.4 S1-S9). Assumes opts.parentSession already
  * exists — the orchestrator creates one zellij session per window and reuses
  * it for every task. Each call owns exactly one tab (opts.tabName).
@@ -365,7 +485,7 @@ export async function runClaudeSession(
     )
 
     // S4 — dialog automation
-    if (!(await handleDialogs(opts.parentSession, opts.tabName, cfg, log, z))) {
+    if (!(await handleDialogs(opts.parentSession, opts.tabName, cfg, log, clock, z))) {
       return { status: "error", reason: "dialog timeout" }
     }
 
@@ -400,8 +520,22 @@ export async function runClaudeSession(
       await z.sendText(opts.parentSession, opts.tabName, opts.wakeUpPrompt)
     }
 
-    // S5b — task prompt
-    await z.pasteFile(opts.parentSession, opts.tabName, opts.promptFile)
+    // S5b — task prompt, with verify-and-retry to dodge the SessionStart-hook
+    // race (bug 3 from 2026-05-23 live e2e).
+    //
+    // The problem: claude TUI shows the `❯` input prompt very early during
+    // startup, while plugins like claude-mem are still streaming SessionStart
+    // hook output INTO THE TUI for several seconds. A bracketed paste fired
+    // in that window lands in the TUI's input field but is then clobbered
+    // by the continuing hook render — never makes it to the model as a user
+    // message.
+    //
+    // The fix: split paste from submit. Paste content into the input field
+    // (without pressing Enter), capture the pane after a short settle, and
+    // confirm the paste signature is visible in the input area. If not,
+    // send Esc to clear any partial state and retry. Only press Enter once
+    // we can SEE the prompt sitting in the input field.
+    await pasteWithVerify(opts.parentSession, opts.tabName, opts.promptFile, clock, log, z)
 
     // S6 — detection loop
     const result = await pollUntilDone(opts, cfg, log, clock, z)
@@ -445,7 +579,7 @@ export async function launchInteractiveSession(
   const tab = "__init__"
   const cmd = `${cfg.runtime.bin} ${cfg.runtime.extraArgs.join(" ")}`.trim()
   await realSendKeys(sessionName, tab, `cd '${cwd}' && ${cmd}`, "Enter")
-  if (!(await handleDialogs(sessionName, tab, cfg, log))) {
+  if (!(await handleDialogs(sessionName, tab, cfg, log, new RealClock()))) {
     throw new Error("claude TUI did not reach input prompt before dialog timeout")
   }
   await realSendText(sessionName, tab, initialMessage)
@@ -462,7 +596,7 @@ export async function runSmokeTest(cfg: Config, log: Logger): Promise<boolean> {
     await newSession(session, cfg)
     const cmd = `${cfg.runtime.bin} ${cfg.runtime.extraArgs.join(" ")}`.trim()
     await realSendKeys(session, tab, cmd, "Enter")
-    if (!(await handleDialogs(session, tab, cfg, log))) return false
+    if (!(await handleDialogs(session, tab, cfg, log, new RealClock()))) return false
     // The sentinel token appears twice in the pane: once echoed from the
     // injected prompt, once in Claude's reply. ≥2 occurrences confirms a
     // real reply (single occurrence is just the echo).
