@@ -6,7 +6,7 @@
  * spawning anything.
  */
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SimClock } from "../src/clock.ts"
@@ -38,6 +38,10 @@ function fakeZellij(opts: {
 } = {}): { z: ZellijOps; calls: Call[] } {
   const calls: Call[] = []
   let captureIdx = 0
+  // Tracks the content of the most recent pasteFileNoSubmit so subsequent
+  // capture() calls can echo it back — lets pasteWithVerify's probe check
+  // pass without each test updating its captureScript.
+  let pendingPasteContent = ""
   const z: ZellijOps = {
     async newTab(s, t) {
       calls.push({ fn: "newTab", args: [s, t] })
@@ -54,12 +58,21 @@ function fakeZellij(opts: {
     async pasteFile(s, t, file) {
       calls.push({ fn: "pasteFile", args: [s, t, file] })
     },
+    async pasteFileNoSubmit(s, t, file) {
+      calls.push({ fn: "pasteFileNoSubmit", args: [s, t, file] })
+      try { pendingPasteContent = readFileSync(file, "utf8") } catch { /* fine */ }
+    },
+    async submitInput(s, t) {
+      calls.push({ fn: "submitInput", args: [s, t] })
+      pendingPasteContent = ""
+    },
     async pipePane(s, t, file) {
       calls.push({ fn: "pipePane", args: [s, t, file] })
     },
     async capture(s, t, lines) {
       const idx = captureIdx++
-      const text = opts.captureScript ? opts.captureScript(idx) : "❯ "
+      const scripted = opts.captureScript ? opts.captureScript(idx) : "❯ "
+      const text = pendingPasteContent ? `${scripted}\n${pendingPasteContent}` : scripted
       calls.push({ fn: "capture", args: [s, t, lines, text] })
       return text
     },
@@ -93,11 +106,14 @@ function makeOpts(over: Partial<InvokeOpts> = {}): InvokeOpts {
 
 describe("buildLaunchCommand", () => {
   // F01 truth table — bin × mode (4 cases).
+  // All outputs prefixed with `command ` to bypass user shell aliases /
+  // functions (the 2026-05-23 live e2e bug 2 root cause — an interactive
+  // `alias claude='happy --yolo'` would otherwise hijack the launch).
   test("bin=happy first launch: NO --session-id (Happy 1.1.8 swallows it)", () => {
     const cfg = testConfig() // bin=happy, extraArgs=["--dangerously-skip-permissions"]
     const opts = makeOpts({ claudeSessionId: "abc-123", resume: false })
     expect(buildLaunchCommand(cfg, opts)).toBe(
-      "happy --dangerously-skip-permissions",
+      "command happy --dangerously-skip-permissions",
     )
   })
 
@@ -105,7 +121,7 @@ describe("buildLaunchCommand", () => {
     const cfg = testConfig()
     const opts = makeOpts({ claudeSessionId: "abc-123", resume: true })
     expect(buildLaunchCommand(cfg, opts)).toBe(
-      "happy --resume abc-123 --dangerously-skip-permissions",
+      "command happy --resume abc-123 --dangerously-skip-permissions",
     )
   })
 
@@ -115,7 +131,7 @@ describe("buildLaunchCommand", () => {
     })
     const opts = makeOpts({ claudeSessionId: "uuid-1", resume: false })
     expect(buildLaunchCommand(cfg, opts)).toBe(
-      "claude --session-id uuid-1 --dangerously-skip-permissions",
+      "command claude --session-id uuid-1 --dangerously-skip-permissions",
     )
   })
 
@@ -125,7 +141,7 @@ describe("buildLaunchCommand", () => {
     })
     const opts = makeOpts({ claudeSessionId: "uuid-1", resume: true })
     expect(buildLaunchCommand(cfg, opts)).toBe(
-      "claude --resume uuid-1 --dangerously-skip-permissions",
+      "command claude --resume uuid-1 --dangerously-skip-permissions",
     )
   })
 
@@ -134,7 +150,7 @@ describe("buildLaunchCommand", () => {
       runtime: { bin: "claude", extraArgs: [] },
     })
     const opts = makeOpts({ claudeSessionId: "uuid-1", resume: false })
-    expect(buildLaunchCommand(cfg, opts)).toBe("claude --session-id uuid-1")
+    expect(buildLaunchCommand(cfg, opts)).toBe("command claude --session-id uuid-1")
   })
 
   test("empty extraArgs (bin=happy first launch): just bin", () => {
@@ -142,7 +158,7 @@ describe("buildLaunchCommand", () => {
       runtime: { bin: "happy", extraArgs: [] },
     })
     const opts = makeOpts({ claudeSessionId: "abc-123", resume: false })
-    expect(buildLaunchCommand(cfg, opts)).toBe("happy")
+    expect(buildLaunchCommand(cfg, opts)).toBe("command happy")
   })
 })
 
@@ -541,7 +557,8 @@ describe("runClaudeSession — resume ordering", () => {
       const wakeIdx = calls.findIndex(
         (c) => c.fn === "sendText" && c.args[2] === "RESUMING NOW",
       )
-      const pasteIdx = calls.findIndex((c) => c.fn === "pasteFile")
+      // S5b uses pasteFileNoSubmit (via pasteWithVerify) now, not pasteFile.
+      const pasteIdx = calls.findIndex((c) => c.fn === "pasteFileNoSubmit")
       expect(wakeIdx).toBeGreaterThan(-1)
       expect(pasteIdx).toBeGreaterThan(-1)
       expect(wakeIdx).toBeLessThan(pasteIdx)

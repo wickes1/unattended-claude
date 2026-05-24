@@ -252,11 +252,31 @@ export async function sendKeys(session: string, tab: string, ...keys: string[]):
 }
 
 /** Inject multi-line text via bracketed paste (avoiding line-by-line submit),
- *  then press Enter to send. */
-async function paste(session: string, tab: string, text: string): Promise<void> {
+ *  WITHOUT submitting. Caller must call submitInput() separately.
+ *
+ *  The `--` end-of-options sentinel before `text` is critical: zellij's CLI
+ *  parser otherwise interprets any text starting with `--` or `---` (e.g.
+ *  YAML frontmatter delimiters in task doc bodies) as a flag and rejects the
+ *  whole command. Discovered the hard way in the 2026-05-23 live e2e — paste
+ *  silently failed on every task doc because they start with `---`. */
+async function pasteNoSubmit(session: string, tab: string, text: string): Promise<void> {
   const { paneId } = entry(session, tab)
-  await zellijCmd(actionArgs(session, ["paste", "--pane-id", paneId, text]))
+  await zellijCmd(actionArgs(session, ["paste", "--pane-id", paneId, "--", text]))
+}
+
+/** Inject multi-line text via bracketed paste, then press Enter to submit. */
+async function paste(session: string, tab: string, text: string): Promise<void> {
+  await pasteNoSubmit(session, tab, text)
   await sleep(200)
+  await submitInput(session, tab)
+}
+
+/** Just press Enter on the input field (no paste). Used by the verify-and-retry
+ *  path in claude-session.ts S5b, where the paste step is separated from the
+ *  submit step so the caller can confirm the paste actually landed before
+ *  committing to a submission. */
+export async function submitInput(session: string, tab: string): Promise<void> {
+  const { paneId } = entry(session, tab)
   await zellijCmd(actionArgs(session, ["send-keys", "--pane-id", paneId, "Enter"]))
 }
 
@@ -268,6 +288,13 @@ export async function sendText(session: string, tab: string, text: string): Prom
 /** Paste an entire file's content into the TUI — the safe path for prompt injection. */
 export async function pasteFile(session: string, tab: string, file: string): Promise<void> {
   await paste(session, tab, readFileSync(file, "utf8"))
+}
+
+/** Paste an entire file's content WITHOUT submitting. Caller must verify and
+ *  then call submitInput() separately. Used by claude-session.ts S5b to dodge
+ *  the SessionStart-hook race documented at the call site. */
+export async function pasteFileNoSubmit(session: string, tab: string, file: string): Promise<void> {
+  await pasteNoSubmit(session, tab, readFileSync(file, "utf8"))
 }
 
 /**
