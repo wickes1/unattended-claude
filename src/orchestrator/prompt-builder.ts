@@ -94,9 +94,39 @@ export class PromptBuilder {
     )
   }
 
-  /** First-episode prompt: paste the task doc body. */
-  initial(task: TaskDoc, episode: number): PromptResult {
-    const text = this.happyTitlePreamble(task) + readFileSync(task.file, "utf8")
+  /**
+   * Postamble that tells Claude to write a SUMMARY back to the task doc and a
+   * sentinel file at `sentinelFile`. The sentinel is the orchestrator's
+   * primary completion signal (`pollUntilDone` step 6); without an explicit
+   * instruction Claude never writes it and the orchestrator falls back to a
+   * brittle pane-inactivity heuristic that breaks the moment a user attaches
+   * and types anything, or the TUI repaints. Bundling sentinel + summary in
+   * one postamble keeps the contract local to the prompt.
+   */
+  private completionPostamble(task: TaskDoc, sentinelFile: string): string {
+    return (
+      `\n\n---\n\n` +
+      `When you finish the task, complete these two steps before stopping:\n\n` +
+      `1. Append a \`## Summary\` section to \`${task.file}\` with 3-5 bullets ` +
+      `covering: what you did, what is working, what is left or blocked.\n\n` +
+      `2. Write the file \`${sentinelFile}\` containing the single line "done" ` +
+      `to signal completion to the unattended-claude orchestrator.\n\n` +
+      `Stop only after both files exist.\n`
+    )
+  }
+
+  /**
+   * First-episode prompt: paste the task doc body. When `sentinelFile` is
+   * provided (production path), appends a completion postamble instructing
+   * Claude to write the sentinel + a SUMMARY section. Omit in tests that
+   * only care about the task-body slice of the prompt.
+   */
+  initial(task: TaskDoc, episode: number, sentinelFile?: string): PromptResult {
+    const postamble = sentinelFile
+      ? this.completionPostamble(task, sentinelFile)
+      : ""
+    const text =
+      this.happyTitlePreamble(task) + readFileSync(task.file, "utf8") + postamble
     const path = join(this.deps.promptsDir, `${task.id}-ep${episode}.md`)
     writeFileSync(path, text)
     return { text, path }
@@ -125,15 +155,20 @@ export class PromptBuilder {
     task: TaskDoc,
     handoffPath: string,
     episode: number,
+    sentinelFile?: string,
   ): PromptResult {
     const handoff = readFileSync(handoffPath, "utf8")
+    const postamble = sentinelFile
+      ? this.completionPostamble(task, sentinelFile)
+      : ""
     const text =
       this.happyTitlePreamble(task) +
       "The previous session ran out of context and was ended. Read the handoff below " +
       "and continue from where the previous session left off. Verify current file/test " +
       "state before making changes.\n\n" +
       "## HANDOFF.md\n\n" +
-      handoff
+      handoff +
+      postamble
     const path = join(this.deps.promptsDir, `${task.id}-ep${episode}.md`)
     writeFileSync(path, text)
     return { text, path }
