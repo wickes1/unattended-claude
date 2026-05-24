@@ -245,7 +245,7 @@ export async function cmdInit(opts: {
         const storedHash = readSkillHash(userSkillFile)
         const userContent = readFileSync(userSkillFile, "utf8")
         const userHash = computeSkillHash(userContent)
-        const unmodified = storedHash !== null && storedHash === userHash
+        const unmodified = storedHash === userHash
 
         if (unmodified) {
           // User hasn't edited since install — silent upgrade.
@@ -340,6 +340,7 @@ function readSkillVersion(skillFile: string): number {
  * the stamp itself doesn't perturb future comparisons. Hex digest.
  */
 function computeSkillHash(content: string): string {
+  // Note: no line-ending normalization. CRLF user file vs LF template → false-positive "modified". Acceptable for v1.
   const stripped = content.split("\n")
     .filter((l) => !/^template_hash:\s/.test(l))
     .join("\n")
@@ -362,14 +363,22 @@ function readSkillHash(skillFile: string): string | null {
 /**
  * Insert (or replace) `template_hash: sha256:<hash>` into the frontmatter,
  * right after the `template_version:` line. Any pre-existing hash line is
- * removed first so re-stamping is idempotent.
+ * removed first so re-stamping is idempotent. Scoped to the frontmatter
+ * block so a stray `template_version:`-shaped line in the body can't be
+ * false-matched.
  */
 function stampSkillHash(content: string, hash: string): string {
-  const cleaned = content.split("\n")
+  // If no frontmatter (or no template_version anchor), return unchanged — re-init will short-circuit on userVer === tplVer === 0.
+  const fm = /^---\n([\s\S]*?)\n---/.exec(content)
+  if (!fm) return content
+  const fmBlock = fm[1]!
+  const cleanedFm = fmBlock.split("\n")
     .filter((l) => !/^template_hash:\s/.test(l))
     .join("\n")
-  return cleaned.replace(
+  const stampedFm = cleanedFm.replace(
     /^(template_version:\s*\d+\s*$)/m,
     `$1\ntemplate_hash: sha256:${hash}`,
   )
+  if (stampedFm === cleanedFm) return content
+  return content.slice(0, fm.index) + `---\n${stampedFm}\n---` + content.slice(fm.index + fm[0].length)
 }
