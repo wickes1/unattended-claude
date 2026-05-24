@@ -23,28 +23,67 @@ function freshLayout(): Layout {
 
 describe("parseRunArgs", () => {
   it("parses --until with value", () => {
-    expect(parseRunArgs(["--until", "06:30"])).toEqual({ until: "06:30", force: false })
+    expect(parseRunArgs(["--until", "06:30"])).toEqual({
+      until: "06:30",
+      force: false,
+      foreground: false,
+    })
   })
 
   it("parses --force flag", () => {
-    expect(parseRunArgs(["--force"])).toEqual({ until: null, force: true })
+    expect(parseRunArgs(["--force"])).toEqual({
+      until: null,
+      force: true,
+      foreground: false,
+    })
   })
 
   it("parses both --until and --force together", () => {
     expect(parseRunArgs(["--until", "23:00", "--force"])).toEqual({
       until: "23:00",
       force: true,
+      foreground: false,
     })
   })
 
   it("returns defaults for empty argv", () => {
-    expect(parseRunArgs([])).toEqual({ until: null, force: false })
+    expect(parseRunArgs([])).toEqual({
+      until: null,
+      force: false,
+      foreground: false,
+    })
   })
 
   it("ignores --until without a following value", () => {
-    expect(parseRunArgs(["--until"])).toEqual({ until: null, force: false })
+    expect(parseRunArgs(["--until"])).toEqual({
+      until: null,
+      force: false,
+      foreground: false,
+    })
   })
 })
+
+describe("parseRunArgs --foreground", () => {
+  it("default foreground is false (daemonize)", () => {
+    expect(parseRunArgs([]).foreground).toBe(false)
+  })
+
+  it("--foreground sets flag true", () => {
+    expect(parseRunArgs(["--foreground"]).foreground).toBe(true)
+  })
+
+  it("--foreground composes with --until and --force", () => {
+    const a = parseRunArgs(["--until", "+5m", "--foreground", "--force"])
+    expect(a.foreground).toBe(true)
+    expect(a.until).toBe("+5m")
+    expect(a.force).toBe(true)
+  })
+})
+
+// NOTE: cmdRun daemon-dispatch (fork via Bun.spawn) is OS-coupled and brittle
+// in unit-test environments. Skip integration testing here; verify manually
+// post-merge by running `ucl run --until +5m` and confirming the shell prompt
+// returns immediately + a fresh ~/unattended/logs/orchestrator-<ts>.log appears.
 
 describe("parseUntil", () => {
   it("HH:MM resolves to today at that wall-clock when later than now", () => {

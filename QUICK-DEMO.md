@@ -145,14 +145,25 @@ When claude exits, the zellij session is killed (see `finally` block in `plan.ts
 ## 4. Manual run — `ucl run --until +5m`
 
 > `--until` accepts `HH:MM` (24h clock), `+Nm` (N minutes from now), or `+Nh` (N hours from now). `HH:MM` rolls to tomorrow if it's already past.
+> Default daemonizes. Add `--foreground` to keep it in the current terminal.
 
-**Run:**
+**Daemonized (default):**
 ```bash
-# in terminal A
 ucl run --until +5m
-# equivalent (assuming it's currently 22:00):
-# ucl run --until 22:05
 ```
+
+Returns immediately with `orchestrator detached as PID <pid>, logs at /path/orchestrator-<ts>.log`. Watch the log:
+
+```bash
+tail -f ~/unattended/logs/orchestrator-*.log | jq -r '.msg'
+```
+
+**Foreground (debug):**
+```bash
+ucl run --until +5m --foreground
+```
+
+Blocks the shell with live JSON log stream. Ctrl-C → graceful pause.
 
 **Expected output (in terminal A — orchestrator foreground):**
 ```

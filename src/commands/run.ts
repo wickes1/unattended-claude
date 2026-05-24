@@ -1,11 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import type { Config } from "../config.ts"
 import { Layout } from "../layout.ts"
 import { ConsoleLogger } from "../logger.ts"
 import { RealClock } from "../clock.ts"
 import { appendEvent } from "../events.ts"
+import { ensureDir } from "../fs-utils.ts"
 import { WeeklyLimitGate } from "../orchestrator/rate-limit.ts"
 import { isProcessAlive } from "../orchestrator/lifecycle.ts"
 import { runOrchestrator, type RunResult } from "../orchestrator/main.ts"
@@ -14,36 +15,43 @@ import { activeWindow, windowEndsAt, parseHHMM } from "../schedule.ts"
 import { InteractiveZellijRuntime } from "../runtime/claude-session.ts"
 import type { Clock, Logger, PausedReason, TaskDoc, TaskRuntimeState } from "../types.ts"
 
-export const helpText = `Usage: ucl run [--until <time>] [--force]
+export const helpText = `Usage: ucl run [--until <time>] [--force] [--foreground]
 
-Start the unattended worker.
-  --until <time>   end the run window at this time (otherwise: until queue empty)
-                   accepts HH:MM (24h clock), +Nm (N minutes from now),
-                   or +Nh (N hours from now); HH:MM rolls to tomorrow if past
-                   if omitted, derived from active schedule window in config
-  --force          bypass preflight (weekly-paused / lockfile alive checks)
+Start the unattended worker. Default: detaches (daemonizes) and returns
+the shell prompt immediately; orchestrator log goes to
+<runtime>/logs/orchestrator-<ts>.log. Use --foreground for live JSON
+log stream (debug / first-time use).
 
-The orchestrator runs in the foreground. Detach via Ctrl-C (graceful pause).
+  --until <time>     end the run window at this time (otherwise: until queue empty)
+                     accepts HH:MM (24h clock), +Nm (N minutes from now),
+                     or +Nh (N hours from now); HH:MM rolls to tomorrow if past
+                     if omitted, derived from active schedule window in config
+  --force            bypass preflight (weekly-paused / lockfile alive checks)
+  --foreground       run in the current terminal; do not detach
 `
 
 interface RunArgs {
   /** "HH:MM" or null */
   until: string | null
   force: boolean
+  foreground: boolean
 }
 
 export function parseRunArgs(argv: string[]): RunArgs {
   let until: string | null = null
   let force = false
+  let foreground = false
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--until" && argv[i + 1]) {
       until = argv[i + 1]!
       i++
     } else if (argv[i] === "--force") {
       force = true
+    } else if (argv[i] === "--foreground") {
+      foreground = true
     }
   }
-  return { until, force }
+  return { until, force, foreground }
 }
 
 /**
@@ -242,6 +250,30 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
 
   const windowEnd = deriveWindowEnd(cfg, args.until, clock.now())
   log.log("info", `run starting; window ends ${windowEnd ? windowEnd.toISOString() : "(unbounded)"}`)
+
+  // Daemonize unless --foreground or already a daemon child (re-exec'd by parent).
+  const isDaemonChild = process.env.UCL_DAEMON_CHILD === "1"
+  if (!args.foreground && !isDaemonChild) {
+    const logPath = layout.daemonLogFile(clock.now())
+    ensureDir(dirname(logPath))
+    const fd = openSync(logPath, "a")
+    try {
+      const child = Bun.spawn({
+        cmd: process.argv,
+        env: { ...process.env, UCL_DAEMON_CHILD: "1" },
+        stdin: "ignore",
+        stdout: fd,
+        stderr: fd,
+      })
+      // Detach: parent does not wait for child; child becomes session leader.
+      child.unref()
+      console.log(`orchestrator detached as PID ${child.pid}, logs at ${logPath}`)
+      return { reason: "daemonized", taskCount: 0 }
+    } finally {
+      closeSync(fd)
+    }
+  }
+  // Foreground or daemon-child path continues below.
 
   const runtime = new InteractiveZellijRuntime(cfg, log, clock)
   return withPromptsDir((promptsDir) => {

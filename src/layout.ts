@@ -62,4 +62,9 @@ export class Layout {
   sentinelFile(id: string, n: number): string {
     return join(this.stateDir, `episode-${id}-${n}.done`)
   }
+  /** Path for one daemonized orchestrator run's log file. ISO timestamp avoids collisions across runs. */
+  daemonLogFile(ts: Date): string {
+    const iso = ts.toISOString().replace(/[:.]/g, "-")
+    return join(this.logsDir, `orchestrator-${iso}.log`)
+  }
 }
