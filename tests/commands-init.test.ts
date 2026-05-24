@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseDocument } from "yaml"
@@ -54,6 +54,16 @@ function fakeRl(answers: string[]): RlLike & { seenQuestions: string[]; closed: 
 describe("cmdInit (interactive wizard)", () => {
   it("first init writes config with prompted values, creates runtime tree", async () => {
     const { runtimeDir, configPath, templatePath } = freshDirs()
+    // Fake skills template dir with one dummy skill — proves the install loop
+    // is wired and respects the opts override (avoids hitting the real config/skills).
+    const skillsTemplateDir = mkdtempSync(join(tmpdir(), "ucl-init-skills-"))
+    const dummySkillName = "dummy-skill"
+    const dummySkillDir = join(skillsTemplateDir, dummySkillName)
+    mkdirSync(dummySkillDir, { recursive: true })
+    writeFileSync(
+      join(dummySkillDir, "SKILL.md"),
+      "---\nname: dummy-skill\ntemplate_version: 1\ndescription: test\n---\n\n# dummy\n",
+    )
     // Prompt order: bin first, then runtime dir.
     const rl = fakeRl(["claude", "~/myrun"])
     const res = await cmdInit({
@@ -62,6 +72,7 @@ describe("cmdInit (interactive wizard)", () => {
       runtimeDir,
       toolCheck: () => true,
       rl,
+      skillsTemplateDir,
       log: () => {},
     })
 
@@ -81,6 +92,10 @@ describe("cmdInit (interactive wizard)", () => {
     expect(existsSync(join(runtimeDir, "state", "handoffs"))).toBe(true)
     expect(existsSync(join(runtimeDir, "logs"))).toBe(true)
     expect(existsSync(join(runtimeDir, "todo.md"))).toBe(true)
+
+    // Skill template was copied to runtime_dir/.claude/skills/<name>/SKILL.md.
+    const dummyDst = join(runtimeDir, ".claude", "skills", dummySkillName, "SKILL.md")
+    expect(existsSync(dummyDst)).toBe(true)
 
     // Result shape.
     expect(res.configPath).toBe(configPath)

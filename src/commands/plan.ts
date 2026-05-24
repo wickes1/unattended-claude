@@ -1,8 +1,6 @@
 import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
 import { RealClock } from "../clock.ts"
 import type { Config } from "../config.ts"
-import { findRepoDir } from "../git-utils.ts"
 import { Layout } from "../layout.ts"
 import { ConsoleLogger } from "../logger.ts"
 import { launchInteractiveSession } from "../runtime/claude-session.ts"
@@ -36,11 +34,6 @@ export function planPreflight(layout: Layout): string | null {
   return null
 }
 
-/** v2 repo dir — claude must be launched from here so .claude/skills/task-brief loads. */
-function findThisRepoDir(): string {
-  return findRepoDir(import.meta.dir) ?? join(import.meta.dir, "..", "..")
-}
-
 /** Build the initial prompt that triggers task-brief skill. */
 export function buildPlanInitialPrompt(layout: Layout): string {
   const todo = existsSync(layout.todoFile) ? readFileSync(layout.todoFile, "utf8") : "(empty)"
@@ -68,7 +61,7 @@ export async function cmdPlan(cfg: Config, argv: string[]): Promise<void> {
   }
 
   const sessionName = `unattended-claude-plan-${Date.now()}`
-  const cwd = findThisRepoDir()
+  const cwd = cfg.runtimeDir
   const initialMessage = buildPlanInitialPrompt(layout)
   try {
     await launchInteractiveSession(sessionName, cwd, initialMessage, cfg, log)

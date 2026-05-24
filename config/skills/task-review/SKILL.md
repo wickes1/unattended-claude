@@ -1,5 +1,6 @@
 ---
 name: task-review
+template_version: 1
 description: Walk through recent unattended-claude tasks (completed, paused, failed) with the user. Diagnose failures, suggest remediation, optionally produce a synthesis report. Use when ucl review is invoked.
 ---
 

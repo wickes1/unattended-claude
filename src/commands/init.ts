@@ -1,10 +1,10 @@
 /** `ucl init` — interactive setup wizard. */
-import { existsSync, writeFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { createInterface, type Interface } from "node:readline"
 import { stdin as procStdin, stdout as procStdout } from "node:process"
-import { ensureDir } from "../fs-utils.ts"
+import { atomicWrite, ensureDir } from "../fs-utils.ts"
 import { Layout } from "../layout.ts"
 import { loadConfig, resolvePath } from "../config.ts"
 import {
@@ -86,6 +86,8 @@ export async function cmdInit(opts: {
   toolCheck?: (cmd: string) => boolean
   /** Test override: a fake `rl` skips construction of node:readline. */
   rl?: RlLike
+  /** Test override: point at a fake skills template dir instead of `config/skills/`. */
+  skillsTemplateDir?: string
   log?: (s: string) => void
 } = {}): Promise<InitResult> {
   const log = opts.log ?? console.log
@@ -205,6 +207,41 @@ export async function cmdInit(opts: {
       notes.push(`Created empty todo.md at ${layout.todoFile}`)
     }
 
+    // 8a. Install skill templates with upgrade rule.
+    //     First-install copies verbatim. Re-init with a newer template_version
+    //     warns the user but never overwrites — user opts in via
+    //     `rm -r <skill-dir> && ucl init`. Same "user data is sacred" model as
+    //     ucl.yaml. See plan 2026-05-23-skills-to-runtime.md.
+    const skillsTemplateDir = opts.skillsTemplateDir
+      ?? resolve(import.meta.dir, "..", "..", "config", "skills")
+    if (existsSync(skillsTemplateDir)) {
+      const skillNames = readdirSync(skillsTemplateDir)
+        .filter((n) => statSync(join(skillsTemplateDir, n)).isDirectory())
+      for (const skillName of skillNames) {
+        const userSkillDir = layout.skillDir(skillName)
+        const userSkillFile = layout.skillFile(skillName)
+        const templateSkillFile = join(skillsTemplateDir, skillName, "SKILL.md")
+        if (!existsSync(templateSkillFile)) continue
+
+        if (!existsSync(userSkillFile)) {
+          // First install — copy verbatim.
+          ensureDir(userSkillDir)
+          atomicWrite(userSkillFile, readFileSync(templateSkillFile, "utf8"))
+          notes.push(`Installed skill ${skillName} at ${userSkillFile}`)
+          continue
+        }
+
+        // Already installed — version-compare upgrade decision.
+        const userVer = readSkillVersion(userSkillFile)
+        const tplVer = readSkillVersion(templateSkillFile)
+        if (userVer >= tplVer) continue // already up to date
+        // Template is newer; we never overwrite.
+        log(
+          `(skill ${skillName}: template v${tplVer} available, you have v${userVer}; not overwriting. To accept upstream: rm -r ${userSkillDir} && ucl init)`,
+        )
+      }
+    }
+
     // 9. Preflight summary — only show warn + error rows so the user sees what
     //    they still need to fix. Pass/info are noise here.
     let preflightResults: CheckResult[] = []
@@ -261,4 +298,21 @@ async function promptBin(
 function defaultToolCheck(cmd: string): boolean {
   const r = Bun.spawnSync(["which", cmd], { stdout: "pipe", stderr: "pipe" })
   return r.exitCode === 0
+}
+
+/**
+ * Read `template_version` from a SKILL.md frontmatter block. Returns 0 if the
+ * file has no frontmatter or no `template_version` line — treats missing as
+ * "oldest" so a template that adds the field for the first time still warns
+ * once the user has installed.
+ *
+ * Plain regex — not yaml-utils — because the frontmatter is small, fixed
+ * shape, and pulling Document machinery for a single integer read is overkill.
+ */
+function readSkillVersion(skillFile: string): number {
+  const src = readFileSync(skillFile, "utf8")
+  const m = /^---\n([\s\S]*?)\n---/.exec(src)
+  if (!m) return 0
+  const verLine = /^template_version:\s*(\d+)\s*$/m.exec(m[1]!)
+  return verLine ? Number(verLine[1]) : 0
 }

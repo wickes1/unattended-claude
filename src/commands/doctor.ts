@@ -3,7 +3,7 @@ import { accessSync, constants as fsConstants, existsSync, statSync } from "node
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Config } from "../config.ts"
-import { findRepoDir } from "../git-utils.ts"
+import { Layout } from "../layout.ts"
 
 export const helpText = `Usage: ucl doctor [--json]
 
@@ -160,23 +160,31 @@ export function checkZellijSocket(): CheckResult {
 }
 
 /**
- * The v2 repo bundles agent skills under `.claude/skills/`; if `ucl` is
- * invoked from a shell whose PATH points to a binary detached from the
- * source repo (e.g. a stale install), `plan`/`review` won't find them.
- * Walk up from this module's directory to find the repo root.
+ * Skills are user-installed into `<runtime_dir>/.claude/skills/` by `ucl init`
+ * (parallel to ucl.yaml — user data, not repo-bundled assets). `ucl plan` and
+ * `ucl review` spawn claude with `cwd = runtime_dir` so SKILL.md files there
+ * auto-load. If either is missing, the interactive session will run without
+ * the skill — point the user at `ucl init` to reinstall.
  */
-export function checkSkillFolder(): CheckResult {
-  const dir = findRepoDir(import.meta.dir)
-  if (dir) {
-    const skillPath = join(dir, ".claude", "skills", "task-brief", "SKILL.md")
-    return { severity: "pass", name: "skill folder", detail: skillPath }
+export function checkSkillFolder(cfg: Config): CheckResult {
+  const layout = new Layout(cfg.runtimeDir)
+  const briefFile = layout.skillFile("task-brief")
+  const reviewFile = layout.skillFile("task-review")
+  const missing: string[] = []
+  if (!existsSync(briefFile)) missing.push("task-brief")
+  if (!existsSync(reviewFile)) missing.push("task-review")
+  if (missing.length === 0) {
+    return {
+      severity: "pass",
+      name: "skill folder",
+      detail: layout.runtimeSkillsDir,
+    }
   }
   return {
     severity: "error",
     name: "skill folder",
-    detail: "could not locate .claude/skills/ above the ucl binary",
-    remediation:
-      "run `ucl` from a shell whose PATH resolves to the v2 repo build (`bun link unattended-claude` from the repo root)",
+    detail: `missing skill(s): ${missing.join(", ")} at ${layout.runtimeSkillsDir}`,
+    remediation: "run `ucl init` to install skill templates",
   }
 }
 
@@ -305,7 +313,7 @@ export function runChecks(cfg: Config): CheckResult[] {
   results.push(checkClaude())
   if (cfg.runtime.bin === "happy") results.push(checkHappy())
   results.push(checkZellijSocket())
-  results.push(checkSkillFolder())
+  results.push(checkSkillFolder(cfg))
   results.push(checkConfigFile(cfg))
   results.push(checkRuntimeDir(cfg))
   results.push(checkBillingEnv())
