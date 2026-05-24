@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test"
+import { describe, expect, it, test } from "bun:test"
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -80,10 +80,11 @@ describe("parseRunArgs --foreground", () => {
   })
 })
 
-// NOTE: cmdRun daemon-dispatch (fork via Bun.spawn) is OS-coupled and brittle
-// in unit-test environments. Skip integration testing here; verify manually
-// post-merge by running `ucl run --until +5m` and confirming the shell prompt
-// returns immediately + a fresh ~/unattended/logs/orchestrator-<ts>.log appears.
+// cmdRun daemon-dispatch (fork via Bun.spawn) is OS-coupled and brittle in
+// unit-test environments. Verify manually post-merge by running
+// `ucl run --until +5m` and confirming the shell prompt returns immediately +
+// a fresh ~/unattended/logs/orchestrator-<ts>.log appears.
+test.skip("cmdRun daemon dispatch (integration, manual verify)", () => {})
 
 describe("parseUntil", () => {
   it("HH:MM resolves to today at that wall-clock when later than now", () => {
