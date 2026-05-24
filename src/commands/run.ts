@@ -318,7 +318,7 @@ export async function cmdRun(cfg: Config, argv: string[]): Promise<RunResult> {
 
   const runtime = new InteractiveZellijRuntime(cfg, log, clock)
   return withPromptsDir((promptsDir) => {
-    const pb = new PromptBuilder({ promptsDir })
+    const pb = new PromptBuilder({ promptsDir, bin: cfg.runtime.bin })
     return runOrchestrator(
       {
         cfg,

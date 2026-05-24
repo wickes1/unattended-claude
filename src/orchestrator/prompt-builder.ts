@@ -41,6 +41,21 @@ export interface PromptResult {
 export interface PromptBuilderDeps {
   /** Pre-created temp dir for prompt files. One per orchestrator run. */
   promptsDir: string
+  /**
+   * Runtime bin from `cfg.runtime.bin`. When `"happy"`, every prompt gets
+   * a preamble instructing Claude to call `mcp__happy__change_title` so the
+   * Happy mobile app shows a meaningful chat label instead of "New chat".
+   *
+   * The system prompt Happy injects (`ALWAYS when you start a new chat ...
+   * call mcp__happy__change_title`) is advisory; Claude often skips it when
+   * the first user prompt is a long task doc rather than a chat-style
+   * opener. Promoting the instruction into the user prompt makes it
+   * deterministic.
+   *
+   * Defaults to `"claude"` (no preamble) so existing tests don't need
+   * updating. In production, `src/commands/run.ts` always passes the value.
+   */
+  bin?: string
 }
 
 /**
@@ -64,9 +79,24 @@ const WAKE_UP_TEXT: Record<Exclude<PausedReason, "context-full">, string> = {
 export class PromptBuilder {
   constructor(private deps: PromptBuilderDeps) {}
 
+  /**
+   * Preamble that asks Claude to set the Happy chat title via MCP. Empty
+   * string when bin != "happy" (no-op for `bin: claude` users). Title is
+   * truncated to 40 chars to fit Happy's mobile UI without ellipsis.
+   */
+  private happyTitlePreamble(task: TaskDoc): string {
+    if (this.deps.bin !== "happy") return ""
+    const label = `[ucl] ${task.title}`.slice(0, 40).trim()
+    return (
+      `First, call mcp__happy__change_title with title="${label}" to label ` +
+      `this Happy session for mobile observability. Then proceed with the ` +
+      `instructions below.\n\n---\n\n`
+    )
+  }
+
   /** First-episode prompt: paste the task doc body. */
   initial(task: TaskDoc, episode: number): PromptResult {
-    const text = readFileSync(task.file, "utf8")
+    const text = this.happyTitlePreamble(task) + readFileSync(task.file, "utf8")
     const path = join(this.deps.promptsDir, `${task.id}-ep${episode}.md`)
     writeFileSync(path, text)
     return { text, path }
@@ -78,7 +108,7 @@ export class PromptBuilder {
    */
   wakeUp(task: TaskDoc, pausedReason: PausedReason): PromptResult | null {
     if (pausedReason === "context-full") return null
-    return { text: WAKE_UP_TEXT[pausedReason] }
+    return { text: this.happyTitlePreamble(task) + WAKE_UP_TEXT[pausedReason] }
   }
 
   /** Wind-down cue injected once when the wind-down boundary is reached. */
@@ -98,6 +128,7 @@ export class PromptBuilder {
   ): PromptResult {
     const handoff = readFileSync(handoffPath, "utf8")
     const text =
+      this.happyTitlePreamble(task) +
       "The previous session ran out of context and was ended. Read the handoff below " +
       "and continue from where the previous session left off. Verify current file/test " +
       "state before making changes.\n\n" +
