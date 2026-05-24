@@ -44,6 +44,12 @@ export class Layout {
    *  run's orphan recovery to surface `paused_reason="user-stop-now"`. */
   get stopNowFlagFile(): string { return join(this.stateDir, "stop-now.flag") }
   get logsDir(): string { return join(this.runtimeDir, "logs") }
+  /** User-installed skill templates dir. `ucl plan`/`ucl review` spawn claude
+   *  with `cwd = runtimeDir` so SKILL.md files here auto-load. */
+  get runtimeSkillsDir(): string { return join(this.runtimeDir, ".claude", "skills") }
+
+  skillDir(name: string): string { return join(this.runtimeSkillsDir, name) }
+  skillFile(name: string): string { return join(this.skillDir(name), "SKILL.md") }
 
   taskDocFile(id: string): string { return join(this.tasksDir, `${id}.md`) }
   taskStateFile(id: string): string { return join(this.taskStatesDir, `${id}.json`) }

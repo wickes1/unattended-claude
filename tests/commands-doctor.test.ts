@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -149,11 +149,33 @@ describe("checkBunPath", () => {
 })
 
 describe("checkSkillFolder", () => {
-  test("pass when running from repo (smoke)", () => {
-    // The doctor module lives inside the v2 repo which has .claude/skills.
-    const r = checkSkillFolder()
+  /** Pre-populate `<runtimeDir>/.claude/skills/<name>/SKILL.md` with dummy content. */
+  function seedSkill(runtimeDir: string, name: string): void {
+    const dir = join(runtimeDir, ".claude", "skills", name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\n---\n# ${name}\n`)
+  }
+
+  test("pass when both task-brief and task-review SKILL.md exist under runtime dir", () => {
+    const runtimeDir = mkdtempSync(join(tmpdir(), "ucl-doctor-skills-"))
+    seedSkill(runtimeDir, "task-brief")
+    seedSkill(runtimeDir, "task-review")
+    const cfg = mkCfg({ runtimeDir })
+    const r = checkSkillFolder(cfg)
     expect(r.severity).toBe("pass")
-    expect(r.detail).toContain(".claude")
+    expect(r.detail).toContain(join(runtimeDir, ".claude", "skills"))
+  })
+
+  test("error when one skill is missing — detail names the missing one", () => {
+    const runtimeDir = mkdtempSync(join(tmpdir(), "ucl-doctor-skills-"))
+    // Only install task-brief.
+    seedSkill(runtimeDir, "task-brief")
+    const cfg = mkCfg({ runtimeDir })
+    const r = checkSkillFolder(cfg)
+    expect(r.severity).toBe("error")
+    expect(r.detail).toContain("task-review")
+    expect(r.detail).not.toContain("task-brief,") // task-brief should NOT be listed as missing
+    expect(r.remediation).toBe("run `ucl init` to install skill templates")
   })
 })
 

@@ -1,5 +1,6 @@
 ---
 name: task-brief
+template_version: 1
 description: Grill the user on each todo to produce frozen task docs for unattended execution. Use when ucl plan is invoked or when the user asks to plan tasks for unattended-claude.
 ---
 
