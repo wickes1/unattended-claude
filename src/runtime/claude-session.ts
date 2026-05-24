@@ -9,7 +9,7 @@
  * pollUntilDone and runClaudeSession be unit-tested without spawning a real
  * zellij server.
  */
-import { readFileSync } from "node:fs"
+import { mkdirSync, readFileSync } from "node:fs"
 import { RealClock } from "../clock.ts"
 import type { Config } from "../config.ts"
 import type { Clock, EpisodeResult, InvokeOpts, Logger, Runtime, WindDownInfo } from "../types.ts"
@@ -476,7 +476,13 @@ export async function runClaudeSession(
   try {
     await z.pipePane(opts.parentSession, opts.tabName, opts.rawLogFile) // S2
 
-    // S3 — launch claude/happy
+    // S3 — launch claude/happy. Make sure the workdir exists first; the
+    // task-brief skill writes a task doc with a workdir path under
+    // ~/unattended/workdirs/<id>/ but never materializes the dir, so
+    // dispatching `cd '<workdir>' && command happy ...` would otherwise
+    // fail with "no such file or directory" on a fresh task. mkdirSync
+    // recursive is a no-op if the dir already exists.
+    mkdirSync(opts.workdir, { recursive: true })
     await z.sendKeys(
       opts.parentSession,
       opts.tabName,

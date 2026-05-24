@@ -167,18 +167,33 @@ export async function newSession(name: string, cfg: Config): Promise<void> {
 }
 
 /**
- * Open a new tab inside an existing session. The tab is named so the user
- * can navigate to it via `go-to-tab-name`; the freshly created terminal pane
- * is captured and tracked for subsequent send/capture calls.
+ * Serializes newTab so parallel callers don't race the snapshot→create→
+ * discover sequence. Without this, three concurrent newTab() invocations
+ * each snapshot the same "known" pane set, then each call discoverNewPane
+ * against that stale snapshot and all three claim the SAME freshly-created
+ * paneId — so subsequent sendKeys for tasks 1+2 land in task 3's pane.
+ *
+ * Observed in the 2026-05-23 live e2e: three parallel-dispatched tasks all
+ * shared one pane; their launch commands concatenated into one giant line
+ * (no Enter between them) and bash rejected the result. .catch keeps the
+ * queue draining if a prior newTab throws.
  */
+let newTabQueue: Promise<unknown> = Promise.resolve()
+
 export async function newTab(session: string, tabName: string): Promise<void> {
-  const known = trackedPaneIds(session)
-  const r = await zellijCmd(actionArgs(session, ["new-tab", "--name", tabName]))
-  if (r.code !== 0) {
-    throw new Error(`zellij new-tab failed for "${tabName}" in "${session}": ${r.stderr.trim()}`)
-  }
-  const paneId = await discoverNewPane(session, known)
-  tabs.set(tabKey(session, tabName), { paneId, rawLogFile: null, captureCount: 0 })
+  const prev = newTabQueue
+  const mine = (async () => {
+    await prev.catch(() => {})
+    const known = trackedPaneIds(session)
+    const r = await zellijCmd(actionArgs(session, ["new-tab", "--name", tabName]))
+    if (r.code !== 0) {
+      throw new Error(`zellij new-tab failed for "${tabName}" in "${session}": ${r.stderr.trim()}`)
+    }
+    const paneId = await discoverNewPane(session, known)
+    tabs.set(tabKey(session, tabName), { paneId, rawLogFile: null, captureCount: 0 })
+  })()
+  newTabQueue = mine
+  await mine
 }
 
 /**
