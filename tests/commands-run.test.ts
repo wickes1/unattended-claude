@@ -337,20 +337,29 @@ describe("makeBuildPromptFile (PromptBuilder binding)", () => {
     }
   }
 
-  it("writes task content for fresh episode (resume=false)", () => {
+  it("writes task content + completion postamble for fresh episode (resume=false)", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
     const { fn } = build(layout)
     const path = fn(task, 1, false, blankState(task.id, task.workdir))
-    expect(readFileSync(path, "utf8")).toBe("# Task body content here\n")
+    const content = readFileSync(path, "utf8")
+    expect(content).toContain("# Task body content here")
+    // Postamble: sentinel + summary instructions
+    expect(content).toContain(layout.sentinelFile(task.id, 1))
+    expect(content).toContain("## Summary")
+    expect(content).toContain("Stop only after both files exist")
   })
 
-  it("writes wake-up continuation cue for resume=true", () => {
+  it("writes wake-up continuation cue + completion postamble for resume=true", () => {
     const layout = freshLayout()
     const task = fakeDoc(layout)
     const { fn } = build(layout)
     const path = fn(task, 2, true, blankState(task.id, task.workdir))
-    expect(readFileSync(path, "utf8")).toContain("Continue from where you left off")
+    const content = readFileSync(path, "utf8")
+    expect(content).toContain("Continue from where you left off")
+    // Resume episodes also write the sentinel postamble
+    expect(content).toContain(layout.sentinelFile(task.id, 2))
+    expect(content).toContain("Stop only after both files exist")
   })
 
   it("path filename includes task id + episode", () => {

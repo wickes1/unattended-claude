@@ -156,6 +156,64 @@ describe("PromptBuilder.windDown", () => {
   })
 })
 
+describe("PromptBuilder completion postamble (sentinel + summary)", () => {
+  it("initial appends sentinel-write + summary-append instructions when sentinelFile provided", () => {
+    const promptsDir = freshPromptsDir()
+    const task = fakeTaskDoc("# do the thing\n\nbody\n")
+    const pb = new PromptBuilder({ promptsDir })
+    const sentinel = "/tmp/ucl/state/x-ep1.done"
+    const r = pb.initial(task, 1, sentinel)
+    expect(r.text).toContain("## Summary")
+    expect(r.text).toContain(task.file)
+    expect(r.text).toContain(sentinel)
+    expect(r.text).toContain('"done"')
+    expect(r.text).toContain("Stop only after both files exist")
+  })
+
+  it("initial omits postamble when sentinelFile not provided (test mode)", () => {
+    const promptsDir = freshPromptsDir()
+    const task = fakeTaskDoc("body\n")
+    const pb = new PromptBuilder({ promptsDir })
+    const r = pb.initial(task, 1)
+    expect(r.text).not.toContain("Stop only after both files exist")
+  })
+
+  it("resumeWithHandoff appends postamble when sentinelFile provided", () => {
+    const promptsDir = freshPromptsDir()
+    const dir = mkdtempSync(join(tmpdir(), "ucl-pb-pa-"))
+    const handoffPath = join(dir, "h.md")
+    writeFileSync(handoffPath, "handoff body\n")
+    const task: TaskDoc = {
+      id: "y",
+      title: "T",
+      workdir: dir,
+      serial: false,
+      file: join(dir, "y.md"),
+    }
+    writeFileSync(task.file, "task body\n")
+    const pb = new PromptBuilder({ promptsDir })
+    const sentinel = "/tmp/ucl/state/y-ep2.done"
+    const r = pb.resumeWithHandoff(task, handoffPath, 2, sentinel)
+    expect(r.text).toContain("handoff body")
+    expect(r.text).toContain(sentinel)
+    expect(r.text).toContain("Stop only after both files exist")
+  })
+
+  it("wakeUp is unchanged — no postamble (wake-up cue precedes a follow-up paste)", () => {
+    const promptsDir = freshPromptsDir()
+    const task: TaskDoc = {
+      id: "z",
+      title: "T",
+      workdir: "/tmp/z",
+      serial: false,
+      file: "/tmp/z.md",
+    }
+    const pb = new PromptBuilder({ promptsDir })
+    const r = pb.wakeUp(task, "schedule-boundary")
+    expect(r?.text).not.toContain("Stop only after both files exist")
+  })
+})
+
 describe("PromptBuilder happy-title preamble (bin=happy)", () => {
   it("initial prepends mcp__happy__change_title call with [ucl] prefix", () => {
     const promptsDir = freshPromptsDir()

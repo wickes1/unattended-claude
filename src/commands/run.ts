@@ -151,12 +151,13 @@ export function makeBuildPromptFile(
   log?: Logger,
 ): (task: TaskDoc, episode: number, resume: boolean, state: TaskRuntimeState) => string {
   return (task, episode, resume, state) => {
-    if (!resume) return pb.initial(task, episode).path!
+    const sentinelFile = layout.sentinelFile(task.id, episode)
+    if (!resume) return pb.initial(task, episode, sentinelFile).path!
 
     if (state.handoff_pending) {
       const handoffPath = layout.handoffFile(task.id)
       if (existsSync(handoffPath)) {
-        const built = pb.resumeWithHandoff(task, handoffPath, episode)
+        const built = pb.resumeWithHandoff(task, handoffPath, episode, sentinelFile)
         appendEvent(layout, {
           ts: clock.now().toISOString(),
           event: "handoff_resumed",
@@ -174,8 +175,20 @@ export function makeBuildPromptFile(
       )
     }
 
+    // Plain continuation cue: paste the cue line + the sentinel/summary postamble
+    // (same completion contract as initial/resumeWithHandoff). Without it,
+    // resumed episodes wouldn't know to write the sentinel either.
     const path = join(promptsDir, `${task.id}-ep${episode}.md`)
-    writeFileSync(path, `Continue from where you left off in the previous episode.\n`)
+    writeFileSync(
+      path,
+      `Continue from where you left off in the previous episode.\n\n---\n\n` +
+        `When you finish the task, complete these two steps before stopping:\n\n` +
+        `1. Append a \`## Summary\` section to \`${task.file}\` with 3-5 bullets ` +
+        `covering: what you did, what is working, what is left or blocked.\n\n` +
+        `2. Write the file \`${sentinelFile}\` containing the single line "done" ` +
+        `to signal completion to the unattended-claude orchestrator.\n\n` +
+        `Stop only after both files exist.\n`,
+    )
     return path
   }
 }
