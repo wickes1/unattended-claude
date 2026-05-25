@@ -2,11 +2,39 @@
 
 **Use your Claude Pro/Max subscription overnight.** `ucl` queues Claude Code work into a brief, walks each task through a real `claude` session in the background, and appends a summary you read in the morning — so your peak-hour quota stays for interactive work.
 
+```mermaid
+flowchart LR
+    A["📝 todo.md<br/>(your inbox)"] --> B{{"ucl plan<br/>interactive grilling"}}
+    B --> C["📋 tasks/&lt;id&gt;.md<br/>frozen brief<br/>scope · workdir · done-when"]
+    C --> D{{"ucl run --until 06:30<br/>(daemonized)"}}
+    D --> E["🌙 zellij + claude<br/>parallel tabs<br/>subscription-native"]
+    E -.-> F["📱 Happy mobile / web<br/>app.happy.engineering<br/>(optional · bin: happy)"]
+    E --> G["📊 ## Summary<br/>appended to the same doc"]
+    G --> H{{"ucl review<br/>(optional AI synthesis)"}}
+
+    classDef you fill:#fef3c7,stroke:#f59e0b,color:#000
+    classDef action fill:#dbeafe,stroke:#3b82f6,color:#000
+    classDef artifact fill:#f3f4f6,stroke:#9ca3af,color:#000
+    classDef nightly fill:#1e293b,color:#fff,stroke:#0f172a
+    classDef optional fill:#fae8ff,stroke:#a855f7,color:#000
+
+    class A you
+    class B,D,H action
+    class C,G artifact
+    class E nightly
+    class F optional
+```
+
+<details>
+<summary>plain-text equivalent (for terminal viewers)</summary>
+
 ```
 todo.md  ──►  ucl plan  ──►  tasks/<id>.md  ──►  ucl run  ──►  ## Summary
  (inbox)      (grill +     (frozen brief)     (zellij +     (appended to
               freeze)                          claude)        the same doc)
 ```
+
+</details>
 
 ## Why this exists
 
