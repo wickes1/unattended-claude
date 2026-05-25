@@ -63,7 +63,7 @@ function fakeZellij(opts: {
 const STATUS_PANEL_TEXT = `
   Version:          2.1.150
   Session ID:       4765a36e-0e9f-4b09-9779-8f185d20ac6b
-  cwd:              /Users/week-mac/Fonds/Workshop/unattended-claude/unattended-claude
+  cwd:              /tmp/test-workdir
   Login method:     Claude Max account
 `.trim()
 
@@ -98,7 +98,7 @@ describe("discoverViaStatus — ANSI handling", () => {
     const ansiText = `
   \x1b[1mVersion:\x1b[0m          2.1.150
   \x1b[33mSession ID:\x1b[0m       4765a36e-0e9f-4b09-9779-8f185d20ac6b
-  cwd:              /Users/week-mac/Fonds
+  cwd:              /tmp/test-workdir
 `.trim()
     const { z } = fakeZellij({ captureScript: () => ansiText })
     const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
