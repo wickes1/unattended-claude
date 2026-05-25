@@ -36,11 +36,13 @@ If you don't already pay for Claude Pro/Max, the subscription-native angle isn't
 
 ## Install
 
-### Homebrew (planned)
+### Homebrew
 
 ```bash
-brew install wickes1/tap/unattended-claude   # not yet published — track issues/1
+brew install wickes1/tap/unattended-claude
 ```
+
+The formula lives in [wickes1/homebrew-tap](https://github.com/wickes1/homebrew-tap). If `brew` reports the formula is not available yet, the tap may still be catching up — fall back to *From source* below.
 
 ### From source (today)
 
