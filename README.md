@@ -27,7 +27,7 @@ Three things are deliberately different from related tools:
 | **Off-hours / scheduled runs** | ✅ launchd windows, `--until HH:MM` | ❌ interactive only | ⚠️ unblocks after rate limit, not scheduled start | ✅ scheduled automations | ❌ chat-driven |
 | **Parallel multi-task** | ✅ zellij tabs (`max_parallel_tabs`) | ❌ one session | ❌ one session | ✅ subagents | ❌ |
 | **Brief → run → summary discipline** | ✅ enforced by `ucl plan` | ❌ ad-hoc | ❌ pass-through | ⚠️ memory/skills, no frozen brief | ❌ |
-| **Cross-window resume after rate limit** | ✅ `--resume` + handoff | ❌ | ✅ waits + sends "continue" | n/a | n/a |
+| **Cross-window resume after rate limit** | ⚠️ `--resume` + HANDOFF.md path is implemented; reliability currently blocked by the upstream issues listed under [Known limitations](#known-limitations) | ❌ | ✅ waits + sends "continue" | n/a | n/a |
 | **Remote / mobile / web monitoring** | ✅ via Happy Coder (`bin: happy` — mobile app + [app.happy.engineering](https://app.happy.engineering/)) | ❌ desk only | ❌ desk only | ✅ chat platforms | ✅ chat platforms |
 | **Primary surface** | CLI + your terminal (+ Happy mobile / web, optional) | CLI / IDE | Shell wrapper | CLI + chat platforms | Multi-platform chat |
 | **Best fit** | Heavy Claude subscription user with backlog of well-scoped tasks | Anyone using Claude | Hitting rate limits during long sessions | Generic personal AI agent | Personal assistant in your chat apps |
