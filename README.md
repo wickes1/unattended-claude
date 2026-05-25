@@ -39,15 +39,15 @@ If you don't already pay for Claude Pro/Max, the subscription-native angle isn't
 ### Homebrew
 
 ```bash
-# one-liner (auto-taps wickes1/homebrew-tap on first install):
 brew install wickes1/tap/unattended-claude
-
 # or explicit:
 brew tap wickes1/tap
 brew install unattended-claude
 ```
 
-The formula lives in [wickes1/homebrew-tap](https://github.com/wickes1/homebrew-tap) and is auto-bumped by [release-brew.yml](./.github/workflows/release-brew.yml) on every tagged release. `claude` (Anthropic's Claude Code CLI) is a runtime requirement and is **not** available via Homebrew — install it separately from the [official docs](https://docs.anthropic.com/en/docs/claude-code).
+The formula vendors the official Bun runtime as a resource, so no `brew tap oven-sh/bun` is needed. `zellij` is pulled in automatically from Homebrew core. The formula lives in [wickes1/homebrew-tap](https://github.com/wickes1/homebrew-tap) and is auto-bumped by [release-brew.yml](./.github/workflows/release-brew.yml) on every tagged release.
+
+`claude` (Anthropic's Claude Code CLI) is a runtime requirement and is **not** available via Homebrew — install it separately from the [official docs](https://docs.anthropic.com/en/docs/claude-code). For optional mobile / web monitoring of unattended tasks, install [Happy Coder](https://happy.engineering) and set `bin: happy` in `ucl.yaml` (see [How it compares](#how-it-compares) for the differentiator angle).
 
 ### From source (today)
 
