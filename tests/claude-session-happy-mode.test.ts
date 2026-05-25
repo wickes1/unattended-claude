@@ -143,14 +143,19 @@ describe("runClaudeSession: bin=happy first launch", () => {
     }
   })
 
-  test("discovery failure → episode result is {status: 'error', reason: 'session-id discovery failed: ...'}", async () => {
+  test("discovery failure → warn logged, task continues without UUID", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ucl-happy-fail-"))
     try {
       const sentinel = join(dir, "done")
       const promptFile = join(dir, "prompt.md")
       writeFileSync(promptFile, "do the thing")
+      // Touch the sentinel right away so pollUntilDone exits "completed" on
+      // first poll — we want the test to exercise the discovery branch, not
+      // the detection loop.
+      writeFileSync(sentinel, "")
       const { z } = fakeZellij({
-        // captureScript always returns input prompt, no Session ID present.
+        // captureScript always returns input prompt, no Session ID present →
+        // discoverViaStatus will time out.
         captureScript: () => "❯ ",
       })
       const clock = new SimClock(new Date("2026-05-23T00:00:00Z"))
@@ -163,9 +168,13 @@ describe("runClaudeSession: bin=happy first launch", () => {
         clock,
         z,
       )
-      expect(result.status).toBe("error")
-      if (result.status === "error") {
-        expect(result.reason).toMatch(/session-id discovery failed/)
+      // Task should NOT fail on discovery timeout — it should proceed and
+      // complete, with the failure surfaced via a warn log entry.
+      expect(result.status).not.toBe("error")
+      expect(log.has("warn", "session-id discovery failed")).toBe(true)
+      // No UUID was discovered → result carries null/undefined discoveredSessionId.
+      if (result.status === "completed") {
+        expect(result.discoveredSessionId ?? null).toBeNull()
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })

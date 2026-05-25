@@ -1,9 +1,29 @@
 {
   "name": "unattended-claude",
   "version": "0.1.0",
-  "description": "Demand-shifting unattended Claude Code runtime",
-  "private": true,
+  "description": "Demand-shifting unattended Claude Code runtime — uses your Claude Pro/Max subscription.",
   "type": "module",
+  "license": "MIT",
+  "author": "Wickes Wong <https://github.com/wickes1>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wickes1/unattended-claude.git"
+  },
+  "homepage": "https://github.com/wickes1/unattended-claude",
+  "bugs": {
+    "url": "https://github.com/wickes1/unattended-claude/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "ai",
+    "agent",
+    "orchestrator",
+    "demand-shift",
+    "zellij",
+    "unattended"
+  ],
   "bin": { "ucl": "./src/index.ts" },
   "scripts": {
     "start": "bun src/index.ts",

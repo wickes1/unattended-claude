@@ -512,12 +512,15 @@ export async function runClaudeSession(
           log,
         )
       } catch (e) {
-        // Discovery is mandatory for happy first launch — without it the next
-        // episode cannot resume. Fail the episode loudly so the user sees it.
-        return {
-          status: "error",
-          reason: `session-id discovery failed: ${String(e instanceof Error ? e.message : e)}`,
-        }
+        // Discovery is best-effort. Happy 1.1.8's /status panel may not
+        // render a parseable Session ID line within the timeout window. In
+        // that case we log a warning and continue: the task can still run
+        // and produce a Summary, only cross-window --resume and per-episode
+        // usage_snapshot are degraded (no UUID to look up the jsonl by).
+        log.log(
+          "warn",
+          `session-id discovery failed: ${String(e instanceof Error ? e.message : e)} — continuing without UUID; cross-window resume unavailable for this task`,
+        )
       }
     }
 
