@@ -5,7 +5,10 @@ paths:
   runtime_dir: ~/unattended
 
 runtime:
-  bin: happy                                      # claude TUI wrapper (or `claude` directly)
+  bin: claude                                     # `claude` (default — Anthropic's Claude Code CLI)
+                                                  # or `happy` for mobile / web monitoring via Happy Coder
+                                                  # (https://happy.engineering); requires Happy installed
+                                                  # and configured first.
   extra_args:
     - --dangerously-skip-permissions
 

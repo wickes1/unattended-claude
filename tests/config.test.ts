@@ -38,7 +38,7 @@ describe("resolvePath", () => {
 describe("loadConfig", () => {
   it("loads v2 config/ucl.yaml with expected shape", () => {
     const cfg = loadConfig(join(import.meta.dir, "..", "config", "ucl.yaml"))
-    expect(cfg.runtime.bin).toBe("happy")
+    expect(cfg.runtime.bin).toBe("claude")
     expect(cfg.execution.maxParallelTabs).toBe(3)
     expect(cfg.archive.autoAfterDays).toBe(7)
     expect(cfg.schedule.windows.length).toBe(0)
