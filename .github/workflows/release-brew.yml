@@ -1,0 +1,47 @@
+name: Bump Homebrew formula
+
+# On every pushed `v*.*.*` tag, recompute the source tarball sha256 and update
+# `Formula/unattended-claude.rb` in `wickes1/homebrew-tap` so `brew install`
+# resolves the latest release.
+#
+# Requires a `HOMEBREW_TAP_TOKEN` repository secret with `repo` scope (it must
+# be able to push commits to wickes1/homebrew-tap — the default GITHUB_TOKEN
+# cannot reach across repos).
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to bump to (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ref="${{ inputs.version }}"
+          else
+            ref="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${ref}" >> "$GITHUB_OUTPUT"
+          echo "stripped=${ref#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump formula
+        uses: dawidd6/action-homebrew-bump-formula@v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          tap: wickes1/homebrew-tap
+          formula: unattended-claude
+          tag: ${{ steps.version.outputs.tag }}
+          revision: ${{ github.sha }}
+          force: false
