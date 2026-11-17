@@ -4,9 +4,9 @@ name: Bump Homebrew formula
 # `Formula/unattended-claude.rb` in `wickes1/homebrew-tap` so `brew install`
 # resolves the latest release.
 #
-# Requires a `HOMEBREW_TAP_TOKEN` repository secret with `repo` scope (it must
-# be able to push commits to wickes1/homebrew-tap — the default GITHUB_TOKEN
-# cannot reach across repos).
+# Requires a `TAP_DEPLOY_KEY` repository secret: the private half of a deploy key
+# with write access to wickes1/homebrew-tap only (the default GITHUB_TOKEN cannot
+# reach across repos, and a personal token expires).
 
 on:
   push:
@@ -37,11 +37,39 @@ jobs:
           echo "stripped=${ref#v}" >> "$GITHUB_OUTPUT"
 
       - name: Bump formula
-        uses: dawidd6/action-homebrew-bump-formula@v3
-        with:
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          tap: wickes1/homebrew-tap
-          formula: unattended-claude
-          tag: ${{ steps.version.outputs.tag }}
-          revision: ${{ github.sha }}
-          force: false
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.stripped }}
+        run: |
+          if [ -z "$TAP_DEPLOY_KEY" ]; then
+            echo "::error::TAP_DEPLOY_KEY is not set"
+            exit 1
+          fi
+          sha=$(curl -fsSL "https://github.com/wickes1/unattended-claude/archive/refs/tags/${TAG}.tar.gz" | sha256sum | cut -d' ' -f1)
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_deploy_key
+          chmod 600 ~/.ssh/tap_deploy_key
+          # GitHub's published host key (api.github.com/meta), pinned instead of trusting the first connection.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_deploy_key -o IdentitiesOnly=yes"
+          git clone git@github.com:wickes1/homebrew-tap.git tap
+          cd tap
+
+          # Only the formula's own url / sha256 / version, all at two-space indent; the vendored
+          # bun resource's url and sha256 lines are indented deeper and stay as they are.
+          sed -i -E \
+            -e "s#^(  url \"https://github.com/wickes1/unattended-claude/archive/refs/tags/)[^\"]+(\.tar\.gz\")#\1${TAG}\2#" \
+            -e "s#^(  sha256 \")[0-9a-f]+(\")#\1${sha}\2#" \
+            -e "s#^(  version \")[^\"]+(\")#\1${VERSION}\2#" \
+            Formula/unattended-claude.rb
+          if git diff --quiet; then
+            echo "Formula already at ${TAG}"
+            exit 0
+          fi
+          git diff
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "unattended-claude ${VERSION}"
+          git push
